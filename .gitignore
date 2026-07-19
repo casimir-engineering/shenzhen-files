@@ -1,0 +1,26 @@
+# Upstream checkout (reproduced via patches/macos-port-full.patch)
+/nautilus/
+
+# Build trees and install prefixes
+/build/
+/build-*/
+/install/
+/install-*/
+
+# Packaged artifacts (shipped via GitHub releases, not the repo)
+/dist/
+
+# Worker scratch areas and benchmarks
+/scratch-*/
+/bench/
+
+# Generated packaging intermediates
+/package/build/
+
+# Compiled dev tools
+/tools/fda-check
+
+.DS_Store
+
+# Local agent config
+.cursor/
