@@ -1,11 +1,37 @@
-# Nautilus → macOS — Integrated Build Status
+# Shenzhen Files (Nautilus → macOS) — Integrated Build Status
 
-**Date:** 2026-07-16 · **Version:** 51.beta (macOS port) · arm64,
+**Date:** 2026-07-19 · **Version:** 26.7.19 build 1 (upstream 51.beta) · arm64,
 `debugoptimized`, `-Dmacos_port=true` · Homebrew GTK 4.22.4 / GLib 2.88.2.
 
 Single integrated tree at `nautilus/` (uncommitted working-tree patches).
-Deliverables: `build/src/nautilus`, `install/`, `dist/Nautilus.app` (141 MB),
-`dist/Nautilus-mac-arm64.dmg` (44 MB), patch record in `patches/`.
+Deliverables: `build/src/nautilus`, `install/`, `dist/Shenzhen Files.app`,
+`dist/ShenzhenFiles-mac-arm64.dmg` (44 MB), patch record in `patches/`.
+Published: https://github.com/casimir-engineering/shenzhen-files
+(releases carry the DMG; the self-updater consumes `releases/latest`).
+
+---
+
+## Rebrand + self-update + first public release (2026-07-19, W14)
+
+The app now ships as **Shenzhen Files**, styled after the Shenzhen PDF
+product line (`~/Projects/shenzhen-pdf`), with its auto-update mechanism
+ported over:
+
+| Item | State |
+|---|---|
+| Identity | `Shenzhen Files.app`, bundle id `com.intuition.shenzhenfiles` (mirrors `com.intuition.shenzhenpdf`), CFBundleName/DisplayName "Shenzhen Files"; version scheme is shenzhen-pdf's date-based `YY.M.DD` + `CFBundleVersion` build (tag `26.7.19-1`) |
+| Menu bar | Verified via System Events on the installed bundle: Apple · **Shenzhen Files** · File · Edit · View · Go · Window · Help; app menu = About Shenzhen Files / Check Permissions… / Finder Integration… / **Check for Updates…** / Settings… / … / Quit Shenzhen Files |
+| Logo / icon | `package/make-logo.swift` re-creates shenzhen-pdf's mark ("深圳" in #005C9C over a dark subtitle) with subtitle **Files**; `make-icon.sh` renders the full iconset natively per size → `AppIcon.icns` + `dmg-logo.png`; DMG background wordmark + accent switched to the Shenzhen blue |
+| Self-updater | `src/nautilus-macos-updater.m` — port of shenzhen-pdf `SPDFUpdater.mm` (silent daily check with flock'd 24h gate in `~/Library/Application Support/Shenzhen Files/update.json`, hourly re-arm + wake/day-change catch-ups, Install/Skip/Later alert, download panel, DMG mount + extract, detached `--post-update` helper doing the move-aside two-rename swap + relaunch + `.old` rollback handshake). Compiled **with ARC** as its own static lib (`libnautilus-macos-updater.a`) — the MRC bridge flags crash it (verified: SIGSEGV in the JSON parse without ARC). Trust model divergence (ad-hoc signing, no Developer ID): TLS to `api.github.com` + **required** sha256 asset digest from the GitHub API + bundle-id/version pin — shenzhen-pdf's Developer-ID/notarization verification does not apply |
+| Update check verified | Fresh install → `update.json` gains `lastUpdateCheck` + the GitHub `ETag` after the 5-s idle check (HTTP 200, release JSON parsed, tag `26.7.19-1` == running version → up-to-date, silent). `releases/latest/download/ShenzhenFiles-mac-arm64.dmg` 302-resolves to the tag; published digest matches the local DMG sha256 |
+| Repo / release | Public repo `casimir-engineering/shenzhen-files` (package/, patches/, docs/, tools/ — upstream tree reproduced via `patches/macos-port-full.patch`); first release `26.7.19-1` ("26.7.19-1 - First release", shenzhen-pdf's format) with the DMG attached |
+| Installed | `/Applications/Shenzhen Files.app` (ad-hoc signed); old `/Applications/Nautilus.app` **removed**. ⚠ New bundle id + name = TCC resets: **Full Disk Access (and Accessibility for the save-panel handoff) must be re-granted** to Shenzhen Files. Config still lives under `~/.config/nautilus` (internal name unchanged) so preferences/integration state carry over |
+
+Port-controlled user-visible strings (FDA walkthrough, Finder-integration
+first-run + prefs, services error) now say "Shenzhen Files"; the GLib
+application id stays `org.gnome.Nautilus` (D-Bus, gschema paths) —
+`MACOS_BUNDLE_ID` in `nautilus-macos-integration.m` carries the
+LaunchServices-facing id for the default-handler integration.
 
 ---
 

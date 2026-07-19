@@ -130,7 +130,7 @@ index 54e9687..983d6cd 100644
 +  description: 'Build for macOS: replaces glycin, gnome-desktop thumbnailing and the XDG portals with native fallbacks',
 +)
 diff --git a/src/meson.build b/src/meson.build
-index c15e6ce..deae673 100644
+index c15e6ce..3d740ec 100644
 --- a/src/meson.build
 +++ b/src/meson.build
 @@ -46,12 +46,6 @@ libnautilus_sources = [
@@ -165,7 +165,7 @@ index c15e6ce..deae673 100644
    'nautilus-thumbnails.h',
    'nautilus-toolbar.c',
    'nautilus-toolbar.h',
-@@ -289,31 +278,118 @@ libnautilus_sources = [
+@@ -289,37 +278,141 @@ libnautilus_sources = [
    'nautilus-x-content-bar.h',
  ]
  
@@ -200,9 +200,12 @@ index c15e6ce..deae673 100644
 +    'nautilus-macos-terminal.m',
 +    'nautilus-macos-thumbnailer.m',
 +    'nautilus-macos-trash.m',
-+    'nautilus-macos-updater.m',
 +    'nautilus-search-engine-spotlight.c',
 +  ]
++  # nautilus-macos-updater.m is NOT in this list: it is a port of
++  # shenzhen-pdf's ARC-based SPDFUpdater and must be compiled with
++  # -fobjc-arc, which the rest of the (MRC) bridge block does not use.
++  # It gets its own static library below and is linked into libnautilus_dep.
 +  ############################################################################
 +  # End Phase 3 macOS bridge block.
 +  ############################################################################
@@ -290,7 +293,28 @@ index c15e6ce..deae673 100644
 +  objc_args: libnautilus_objc_args
  )
  
++libnautilus_link_with = [libnautilus]
++
++if macos_port
++  # W14 self-updater: ARC-compiled (see the bridge block comment above).
++  libnautilus_updater = static_library(
++    'nautilus-macos-updater',
++    ['nautilus-macos-updater.m'],
++    dependencies: nautilus_deps,
++    include_directories: nautilus_include_dirs,
++    objc_args: libnautilus_objc_args + ['-fobjc-arc']
++  )
++  libnautilus_link_with += [libnautilus_updater]
++endif
++
  libnautilus_include_dirs = include_directories('.')
+ 
+ libnautilus_dep = declare_dependency(
+-  link_with: libnautilus,
++  link_with: libnautilus_link_with,
+   include_directories: [
+     nautilus_include_dirs,
+     libnautilus_include_dirs
 diff --git a/src/nautilus-app-chooser-widget.c b/src/nautilus-app-chooser-widget.c
 index a45977b..bb0cb36 100644
 --- a/src/nautilus-app-chooser-widget.c

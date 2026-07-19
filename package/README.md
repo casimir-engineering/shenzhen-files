@@ -1,6 +1,7 @@
-# package/ — Nautilus.app + DMG packaging (PLAN.md §5 Phase 5)
+# package/ — Shenzhen Files.app + DMG packaging (PLAN.md §5 Phase 5)
 
-Build a relocatable `dist/Nautilus.app` and a styled `dist/Nautilus-mac-arm64.dmg`
+Build a relocatable `dist/Shenzhen Files.app` and a styled
+`dist/ShenzhenFiles-mac-arm64.dmg`
 from the installed prefix at `<repo>/install`.
 
 ## Build pipeline
@@ -10,7 +11,7 @@ install prefix changes — e.g. after other agents rebuild and `meson install`):
 
 ```bash
 meson install -C build --no-rebuild   # refresh install/ if the build changed
-./package/make-app.sh                 # assemble dist/Nautilus.app
+./package/make-app.sh                 # assemble "dist/Shenzhen Files.app"
 ./package/bundle-dylibs.sh            # bundle dylib closure + rewrite + sign
 ./package/make-dmg.sh                 # styled UDZO DMG (needs a GUI session)
 ```
@@ -20,22 +21,22 @@ meson install -C build --no-rebuild   # refresh install/ if the build changed
 | `make-app.sh` | Assembles the bundle: binary + compiled C launcher (`nautilus-launcher.c`), Info.plist (PlistBuddy-stamped), AppIcon, share payload (nautilus data/ontology, compiled gsettings schemas, Adwaita+hicolor icon themes with regenerated caches, shared-mime-info db, gtk-4.0 emoji data, trimmed locales), gdk-pixbuf loaders with a relocatable `loaders.cache`, GIO modules with `giomodule.cache`, minimal fontconfig config. |
 | `bundle-dylibs.sh` | Transitive `otool -L` walker: copies the dylib closure into `Contents/Frameworks`, rewrites ids/references to `@executable_path/../Frameworks/…`, strips absolute rpaths, audits the result, then codesigns every Mach-O and the bundle (ad-hoc by default). |
 | `make-dmg.sh` | Staging dir → UDRW image → Finder layout via osascript (background art, 128 px icons, 150/450 slots) → UDZO compression. `--check` for a dry-run. |
-| `make-icon.sh` | Regenerates `AppIcon.icns` from the upstream SVG (already committed; only needed if the icon changes). |
+| `make-icon.sh` | Regenerates `AppIcon.icns` + `dmg-logo.png` from the Shenzhen Files logo mark (`make-logo.swift`, same 深圳-over-subtitle composition as shenzhen-pdf's icon). |
 | `nautilus-launcher.c` | Source of the exec wrapper; sets `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GDK_PIXBUF_MODULE_FILE`, `GIO_MODULE_DIR`, `FONTCONFIG_FILE` relative to the bundle, then execs `Contents/MacOS/nautilus`. |
 
 ## Standalone vs. Finder integration (installer-facing)
 
-The DMG install is **standalone by default**: dragging Nautilus.app to
-Applications changes nothing about macOS. On the very first launch, Nautilus
+The DMG install is **standalone by default**: dragging Shenzhen Files.app to
+Applications changes nothing about macOS. On the very first launch, the app
 asks once — "Use as a Standalone App" (default) or "Set Up Finder
 Integration…", which merely opens Settings ▸ Finder Integration. There the
-user can individually enable: opening folders in Nautilus by default,
+user can individually enable: opening folders in Shenzhen Files by default,
 syncing Finder's sidebar favorites, and hiding the Finder desktop. Every
-toggle is opt-in, off by default, and revertible at any time (Nautilus
+toggle is opt-in, off by default, and revertible at any time (the app
 records the pre-change system values in
 `~/.config/nautilus/macos-integration.ini` and restores them, plus a
 "Revert All Integrations" button). The Info.plist also declares a passive
-"Open in Nautilus" Services-menu entry, which is harmless in standalone use.
+"Open in Shenzhen Files" Services-menu entry, which is harmless in standalone use.
 
 ## Release signing + notarization (optional, env-gated)
 
@@ -65,14 +66,14 @@ export MAC_SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)'
                                # MAC_SIGN_IDENTITY is set, ad-hoc otherwise
 ./package/make-dmg.sh
 
-xcrun notarytool submit dist/Nautilus-mac-arm64.dmg \
+xcrun notarytool submit dist/ShenzhenFiles-mac-arm64.dmg \
   --keychain-profile <profile-name> --wait
-xcrun stapler staple  dist/Nautilus-mac-arm64.dmg
-xcrun stapler validate dist/Nautilus-mac-arm64.dmg
+xcrun stapler staple  dist/ShenzhenFiles-mac-arm64.dmg
+xcrun stapler validate dist/ShenzhenFiles-mac-arm64.dmg
 
 # verification
-codesign --verify --deep --strict dist/Nautilus.app
-spctl -a -t open --context context:primary-signature dist/Nautilus-mac-arm64.dmg
+codesign --verify --deep --strict "dist/Shenzhen Files.app"
+spctl -a -t open --context context:primary-signature dist/ShenzhenFiles-mac-arm64.dmg
 ```
 
 ## Known relocatability limitations (current binary)
