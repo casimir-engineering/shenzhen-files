@@ -28,7 +28,20 @@
 
 ## Install
 
-Download the DMG above, drag **Shenzhen Files** onto **Applications**, done. The app is ad-hoc signed: on first launch, right-click ▸ Open (or allow it under System Settings ▸ Privacy & Security) to pass Gatekeeper.
+Download the DMG above and drag **Shenzhen Files** onto **Applications**.
+
+### First launch
+
+If macOS blocks the app with *“Apple could not verify 'Shenzhen Files' is free of malware”* (the download is quarantined and the build is not notarized yet):
+
+1. Click **Done** (not *Move to Trash*), then open **System Settings ▸ Privacy & Security**, scroll down to the message about Shenzhen Files, and click **Open Anyway**. On macOS 15 and later this is the only supported path — the old right-click ▸ Open bypass no longer works for unsigned/un-notarized apps.
+2. Terminal alternative (removes the quarantine flag instead):
+
+```bash
+xattr -d com.apple.quarantine "/Applications/Shenzhen Files.app"
+```
+
+Notarized releases (signed with Developer ID) open normally with no extra steps — check the release notes of the version you downloaded.
 
 For Trash browsing, grant Full Disk Access when the app offers the walkthrough (System Settings ▸ Privacy & Security ▸ Full Disk Access).
 
@@ -56,7 +69,7 @@ See [`package/README.md`](package/README.md) for the packaging details and [`doc
 
 ## Updater trust model
 
-Releases are ad-hoc signed (no Developer ID). The self-updater therefore pins its trust to TLS against `api.github.com`/`github.com` and the release asset's sha256 digest from the GitHub API, plus a bundle-id and version pin on the extracted app — an update without a digest is rejected. The swap is a move-aside two-rename with rollback, and the relaunched app confirms the version before the previous bundle is discarded.
+Releases are moving to Developer ID signing + notarization (the same setup as Shenzhen PDF); the updater verifies each downloaded update offline with Security.framework — full Developer ID requirement with a pinned Team ID, a stapled-notarization check on the DMG, and hardened-runtime + bundle-id pins on the extracted app. The sha256 digest from the GitHub API is checked as a corruption heuristic. The swap is a move-aside two-rename with rollback, and the relaunched app confirms the version before the previous bundle is discarded. Release signing runs through `package/sign-and-notarize.sh` (sign every Mach-O with hardened runtime → styled DMG → `notarytool` → staple → Gatekeeper-simulate on a quarantined copy → publish).
 
 ## License
 

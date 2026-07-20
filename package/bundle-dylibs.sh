@@ -247,9 +247,17 @@ else
   echo "==> signing ad-hoc (no password required)"
 fi
 
+# Ad-hoc signing occasionally warns about pre-existing signatures — noise we
+# suppress. Identity signing must FAIL LOUDLY instead: a single silently
+# failed dylib signature poisons the whole bundle (deep verification and
+# notarization both reject it), which is much harder to debug later.
 while IFS= read -r -d '' f; do
   if [[ "$(head -c4 "$f" | xxd -p)" == "cffaedfe" || "$(head -c4 "$f" | xxd -p)" == "cafebabe" ]]; then
-    codesign "${SIGN_FLAGS[@]}" "$f" 2>/dev/null
+    if [[ "$SIGN_ID" == "-" ]]; then
+      codesign "${SIGN_FLAGS[@]}" "$f" 2>/dev/null
+    else
+      codesign "${SIGN_FLAGS[@]}" "$f" || { echo "error: codesign failed: $f" >&2; exit 1; }
+    fi
   fi
 done < <(find "$APP/Contents/Frameworks" "$APP/Contents/Resources/lib" -type f -print0)
 

@@ -28,10 +28,10 @@ index 3c14aa4..858f3b6 100644
        <default>(890,550)</default>
        <summary>Initial size of the file chooser window</summary>
 diff --git a/meson.build b/meson.build
-index 61c6b0b..0ae5d72 100644
+index 61c6b0b..6a728af 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -101,28 +101,70 @@ pkgconfig = import('pkgconfig')
+@@ -101,28 +101,71 @@ pkgconfig = import('pkgconfig')
  ################
  glib_ver = '>= 2.84.0'
  
@@ -60,6 +60,7 @@ index 61c6b0b..0ae5d72 100644
 +      'Quartz',
 +      'QuickLookThumbnailing',
 +      'QuickLookUI',
++      'Security',
 +      'UniformTypeIdentifiers',
 +    ],
 +  )
@@ -3523,10 +3524,10 @@ index d22b5d9..087fe16 100644
      for (idx = 0; locations[idx] != NULL; idx++)
 diff --git a/src/nautilus-macos-bridge.h b/src/nautilus-macos-bridge.h
 new file mode 100644
-index 0000000..02cbd5c
+index 0000000..016c951
 --- /dev/null
 +++ b/src/nautilus-macos-bridge.h
-@@ -0,0 +1,592 @@
+@@ -0,0 +1,593 @@
 +/*
 + * nautilus-macos-bridge.h: C-callable API of the macOS Objective-C bridge.
 + *
@@ -4085,8 +4086,9 @@ index 0000000..02cbd5c
 + * Section W14 — Shenzhen Files self-updater (nautilus-macos-updater.m)
 + *
 + * GitHub-releases self-updater, ported from shenzhen-pdf's SPDFUpdater
-+ * (see the file header in nautilus-macos-updater.m for the design and for
-+ * the ad-hoc-signing trust-model divergence). All entry points no-op when
++ * (see the file header in nautilus-macos-updater.m for the design; trust
++ * boundary = offline Developer ID + notarization verification with Team ID
++ * and bundle-id pins, same as shenzhen-pdf). All entry points no-op when
 + * the process is not the installed com.intuition.shenzhenfiles bundle.
 + * ========================================================================== */
 +
@@ -9295,10 +9297,10 @@ index 0000000..fde4122
 +}
 diff --git a/src/nautilus-macos-updater.m b/src/nautilus-macos-updater.m
 new file mode 100644
-index 0000000..b1e1e16
+index 0000000..7afee9e
 --- /dev/null
 +++ b/src/nautilus-macos-updater.m
-@@ -0,0 +1,1989 @@
+@@ -0,0 +1,2189 @@
 +/*
 + * nautilus-macos-updater.m: GitHub-release self-updater (Shenzhen Files).
 + *
@@ -9326,13 +9328,14 @@ index 0000000..b1e1e16
 + * post-update helper that swaps the bundle with a move-aside two-rename,
 + * re-registers LaunchServices and relaunches.
 + *
-+ * DIVERGENCE from shenzhen-pdf (deliberate): Shenzhen Files is ad-hoc
-+ * signed, so SPDF's offline Developer ID + notarization verification is
-+ * unavailable. The trust boundary here is TLS to api.github.com /
-+ * github.com plus the release asset's sha256 digest from the GitHub API
-+ * (REQUIRED — an asset without a digest is rejected), plus a bundle-id and
-+ * version pin on the extracted app. If the app ever moves to Developer ID
-+ * signing, port spdf_verify_signed_bundle back in.
++ * Trust model (same as shenzhen-pdf since releases are Developer ID signed
++ * and notarized): offline Security.framework verification is the sole
++ * anti-tamper boundary — full Developer ID requirement (Apple anchor + OU
++ * pin 66LJ4BV7Q3 + WWDR and Developer ID leaf markers) with "notarized"
++ * folded in for the DMG, plus a Team ID pin, and for the extracted app the
++ * hardened-runtime flag and the com.intuition.shenzhenfiles bundle-id pin.
++ * The sha256 asset digest from the GitHub API is kept as a corruption
++ * heuristic only (never a trust decision), matching SPDFUpdater.
 + */
 +
 +#define G_LOG_DOMAIN "nautilus-macos-bridge"
@@ -9343,6 +9346,7 @@ index 0000000..b1e1e16
 +#include <glib.h>
 +
 +#import <AppKit/AppKit.h>
++#import <Security/Security.h>
 +#import <CommonCrypto/CommonDigest.h>
 +
 +#include <fcntl.h>
@@ -9354,6 +9358,7 @@ index 0000000..b1e1e16
 + * Constants
 + * ------------------------------------------------------------------------- */
 +
++static NSString *const kSZFTeamID = @"66LJ4BV7Q3";
 +static NSString *const kSZFAppBundleID = @"com.intuition.shenzhenfiles";
 +static NSString *const kSZFReleasesLatestURL =
 +    @"https://api.github.com/repos/casimir-engineering/shenzhen-files/releases/latest";
@@ -9373,6 +9378,8 @@ index 0000000..b1e1e16
 +static const NSInteger kSZFSiblingQuitTimeoutSeconds = 20;
 +
 +static NSString *const kSZFUpdaterErrorDomain = @"SZFUpdaterErrorDomain";
++
++static const uint32_t kSZFHardenedRuntimeFlag = 0x10000;    /* kSecCodeSignatureRuntime */
 +
 +/* ---------------------------------------------------------------------------
 + * Version comparison (pure; "YY.M.DD-BUILD" split on "[. -]")
@@ -9458,7 +9465,170 @@ index 0000000..b1e1e16
 +}
 +
 +/* ---------------------------------------------------------------------------
-+ * Integrity verification (ad-hoc build: sha256 digest + bundle-id pin)
++ * Offline signature verification (the trust boundary; port of
++ * spdf_verify_signed_bundle)
++ * ------------------------------------------------------------------------- */
++
++/* Full Developer ID requirement: Apple anchor + OU pin + WWDR intermediate
++ * marker (1.2.840.113635.100.6.2.6) + Developer ID Application leaf marker
++ * (1.2.840.113635.100.6.1.13). Pinning both markers prevents a leaf from any
++ * other Apple-anchored program with the same OU from satisfying it. */
++static NSString *const kSZFDeveloperIDRequirement =
++    @"anchor apple generic and "
++    @"certificate leaf[subject.OU] = \"66LJ4BV7Q3\" and "
++    @"certificate 1[field.1.2.840.113635.100.6.2.6] exists and "
++    @"certificate leaf[field.1.2.840.113635.100.6.1.13] exists";
++
++static BOOL
++szf_verify_signed_bundle (NSURL *url, BOOL isApp, NSError **error)
++{
++    if (!url)
++    {
++        if (error)
++        {
++            *error = szf_make_error (@"No file to verify.");
++        }
++        return NO;
++    }
++
++    SecStaticCodeRef code = NULL;
++    OSStatus status = SecStaticCodeCreateWithPath ((__bridge CFURLRef) url,
++                                                   kSecCSDefaultFlags, &code);
++    if (status != errSecSuccess || !code)
++    {
++        if (error)
++        {
++            *error = szf_make_error (@"The update could not be read for verification.");
++        }
++        if (code)
++        {
++            CFRelease (code);
++        }
++        return NO;
++    }
++
++    BOOL ok = NO;
++    SecRequirementRef requirement = NULL;
++    CFErrorRef cfError = NULL;
++    CFDictionaryRef info = NULL;
++
++    @try
++    {
++        /* 1. Developer ID requirement. For the DMG additionally fold in
++         *    "notarized" so the offline stapled-ticket gate is part of the
++         *    same SecStaticCode validity check. */
++        NSString *reqString = kSZFDeveloperIDRequirement;
++        if (!isApp)
++        {
++            reqString = [reqString stringByAppendingString:@" and notarized"];
++        }
++
++        if (SecRequirementCreateWithString ((__bridge CFStringRef) reqString,
++                                            kSecCSDefaultFlags, &requirement) != errSecSuccess ||
++            !requirement)
++        {
++            if (error)
++            {
++                *error = szf_make_error (@"Could not build the verification policy.");
++            }
++            return NO;
++        }
++
++        /* For the extracted app, deep-verify: nested Mach-O (the bundled
++         * dylib closure!), the strict resource envelope, all architectures. */
++        SecCSFlags validityFlags = kSecCSDefaultFlags;
++        if (isApp)
++        {
++            validityFlags |= kSecCSCheckAllArchitectures | kSecCSCheckNestedCode |
++                             kSecCSStrictValidate;
++        }
++        status = SecStaticCodeCheckValidityWithErrors (code, validityFlags, requirement,
++                                                       &cfError);
++        if (status != errSecSuccess)
++        {
++            if (error)
++            {
++                *error = szf_make_error (@"The update's signature or notarization "
++                                         @"did not pass verification.");
++            }
++            return NO;
++        }
++
++        /* 2. Independently pin the Team ID (never the DMG codesign
++         *    Identifier, which is hdiutil-generated). */
++        if (SecCodeCopySigningInformation (code, kSecCSSigningInformation, &info) !=
++                errSecSuccess ||
++            !info)
++        {
++            if (error)
++            {
++                *error = szf_make_error (@"Could not read the update's signing information.");
++            }
++            return NO;
++        }
++        NSDictionary *infoDict = (__bridge NSDictionary *) info;
++        NSString *team = infoDict[(__bridge NSString *) kSecCodeInfoTeamIdentifier];
++        if (![team isEqualToString:kSZFTeamID])
++        {
++            if (error)
++            {
++                *error = szf_make_error (@"The update was signed by an unexpected developer.");
++            }
++            return NO;
++        }
++
++        if (isApp)
++        {
++            /* 3a. Hardened runtime flag. */
++            NSNumber *flags = infoDict[(__bridge NSString *) kSecCodeInfoFlags];
++            if (!((flags.unsignedIntValue) & kSZFHardenedRuntimeFlag))
++            {
++                if (error)
++                {
++                    *error = szf_make_error (@"The update is not built with the "
++                                             @"hardened runtime.");
++                }
++                return NO;
++            }
++            /* 3b. Bundle id pin (applies to the app, never the DMG). */
++            NSDictionary *plist = infoDict[(__bridge NSString *) kSecCodeInfoPList];
++            NSString *bundleID = plist[@"CFBundleIdentifier"];
++            if (![bundleID isEqualToString:kSZFAppBundleID])
++            {
++                if (error)
++                {
++                    *error = szf_make_error (@"The update is not Shenzhen Files.");
++                }
++                return NO;
++            }
++        }
++
++        ok = YES;
++    }
++    @finally
++    {
++        if (info)
++        {
++            CFRelease (info);
++        }
++        if (cfError)
++        {
++            CFRelease (cfError);
++        }
++        if (requirement)
++        {
++            CFRelease (requirement);
++        }
++        if (code)
++        {
++            CFRelease (code);
++        }
++    }
++    return ok;
++}
++
++/* ---------------------------------------------------------------------------
++ * Content integrity (sha256 digest heuristic) + identity/version pin
 + * ------------------------------------------------------------------------- */
 +
 +static NSString *
@@ -9495,9 +9665,8 @@ index 0000000..b1e1e16
 +}
 +
 +/* The extracted app must be Shenzhen Files (bundle-id pin) at the published
-+ * version. TRUST NOTE: with ad-hoc signing this is an identity check, not an
-+ * anti-tamper boundary — that boundary is the TLS + sha256-digest check on
-+ * the DMG the app was extracted from. */
++ * version. Complements szf_verify_signed_bundle (the trust boundary) with
++ * the tag/version cross-check that catches a swapped payload. */
 +static BOOL
 +szf_verify_extracted_app (NSString *appPath, NSString *tag, NSError **error)
 +{
@@ -9752,12 +9921,15 @@ index 0000000..b1e1e16
 +
 +        NSFileManager *fm = NSFileManager.defaultManager;
 +
-+        /* Identity re-check of the staged bundle immediately before the swap
-+         * (bundle-id + version were verified pre-spawn; ad-hoc build has no
-+         * signature to re-verify — see file header). */
++        /* TRUST BOUNDARY: re-verify the staged bundle here, in the trusted
++         * in-place binary, immediately before it is renamed into the final
++         * path (the staged copy sat in a temp dir across the quit window
++         * where a local attacker could have swapped it). */
 +        NSError *verifyErr = nil;
 +        NSString *pendingTag = szf_bundle_short_version (stagedAppPath);
-+        if (!szf_verify_extracted_app (stagedAppPath, pendingTag, &verifyErr))
++        if (!szf_verify_signed_bundle ([NSURL fileURLWithPath:stagedAppPath],
++                                       /*isApp=*/YES, &verifyErr) ||
++            !szf_verify_extracted_app (stagedAppPath, pendingTag, &verifyErr))
 +        {
 +            [fm removeItemAtPath:stagedAppPath error:nil];
 +            szf_helper_clear_update_state ();
@@ -9828,9 +10000,12 @@ index 0000000..b1e1e16
 +            return 1;
 +        }
 +
-+        /* Final identity check at the final path, then strip quarantine so
-+         * Gatekeeper does not translocate the relaunched process. */
-+        if (!szf_verify_extracted_app (targetBundlePath, pendingTag, NULL))
++        /* TRUST BOUNDARY (final): re-verify the code now sitting at the
++         * final path before it is registered and launched, then strip
++         * quarantine so Gatekeeper does not translocate the relaunch. */
++        if (!szf_verify_signed_bundle ([NSURL fileURLWithPath:targetBundlePath],
++                                       /*isApp=*/YES, NULL) ||
++            !szf_verify_extracted_app (targetBundlePath, pendingTag, NULL))
 +        {
 +            [fm removeItemAtPath:targetBundlePath error:nil];
 +            if (targetExists)
@@ -10319,8 +10494,7 @@ index 0000000..b1e1e16
 +                    szf_compare_versions (tag, running) == NSOrderedDescending);
 +    BOOL notDowngrade = (tag.length &&
 +                         szf_compare_versions (tag, highestSeen) != NSOrderedAscending);
-+    /* Ad-hoc trust model: the digest is REQUIRED (see file header). */
-+    BOOL hasAsset = (downloadURL.length > 0 && assetDigest.length > 0);
++    BOOL hasAsset = (downloadURL.length > 0);
 +    BOOL available = isNewer && notDowngrade && hasAsset && !draft && !prerelease;
 +
 +    if (!available)
@@ -10537,7 +10711,8 @@ index 0000000..b1e1e16
 +        return;                     /* *outError set, or user-cancelled (silent) */
 +    }
 +
-+    /* Size + sha256 digest — the anti-tamper boundary on the ad-hoc build. */
++    /* Content integrity (corruption heuristic only — the §5.4 signature +
++     * Team ID + notarization gate below is the sole trust boundary). */
 +    NSDictionary *dmgAttrs = [fm attributesOfItemAtPath:dmgURL.path error:nil];
 +    long long actualSize = [dmgAttrs[NSFileSize] longLongValue];
 +    if (assetSize > 0 && actualSize != assetSize)
@@ -10548,19 +10723,34 @@ index 0000000..b1e1e16
 +        }
 +        return;
 +    }
-+    [self setProgressIndeterminateOnMain:@"Verifying download…"];
 +    NSString *expectedDigest = info[@"assetDigest"];
-+    NSString *hexDigest = [expectedDigest hasPrefix:@"sha256:"]
-+                          ? [expectedDigest substringFromIndex:7]
-+                          : expectedDigest;
-+    NSString *computed = szf_sha256_hex_for_file (dmgURL);
-+    if (hexDigest.length == 0 || computed.length == 0 ||
-+        [computed caseInsensitiveCompare:hexDigest] != NSOrderedSame)
++    if ([expectedDigest isKindOfClass:NSString.class] && expectedDigest.length)
++    {
++        NSString *hexDigest = [expectedDigest hasPrefix:@"sha256:"]
++                              ? [expectedDigest substringFromIndex:7]
++                              : expectedDigest;
++        NSString *computed = szf_sha256_hex_for_file (dmgURL);
++        if (computed.length && hexDigest.length &&
++            [computed caseInsensitiveCompare:hexDigest] != NSOrderedSame)
++        {
++            if (outError)
++            {
++                *outError = szf_make_error (@"The downloaded update appears to be corrupted.");
++            }
++            return;
++        }
++    }
++
++    /* Verify the DMG offline BEFORE mounting: Developer ID + Team ID +
++     * stapled notarization ticket. */
++    [self setProgressIndeterminateOnMain:@"Verifying signature…"];
++    NSError *dmgVerifyErr = nil;
++    if (!szf_verify_signed_bundle (dmgURL, /*isApp=*/NO, &dmgVerifyErr))
 +    {
 +        if (outError)
 +        {
-+            *outError = szf_make_error (@"The downloaded update could not be verified "
-+                                        @"and was not installed.");
++            *outError = szf_make_error (@"The update could not be verified and "
++                                        @"was not installed.");
 +        }
 +        return;
 +    }
@@ -10603,7 +10793,19 @@ index 0000000..b1e1e16
 +        }
 +    }
 +
-+    /* Identity + version pin on the extracted app. */
++    /* Re-verify the extracted app offline (deep: nested code + strict
++     * resource envelope), then the identity + version pin. */
++    NSError *appVerifyErr = nil;
++    if (!szf_verify_signed_bundle ([NSURL fileURLWithPath:extractedApp],
++                                   /*isApp=*/YES, &appVerifyErr))
++    {
++        if (outError)
++        {
++            *outError = szf_make_error (@"The update could not be verified and "
++                                        @"was not installed.");
++        }
++        return;
++    }
 +    if (!szf_verify_extracted_app (extractedApp, tag, outError))
 +    {
 +        return;

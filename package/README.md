@@ -41,7 +41,24 @@ records the pre-change system values in
 ## Release signing + notarization (optional, env-gated)
 
 By default everything is signed **ad-hoc** (`codesign -s -`), which is enough to
-run locally. For public distribution, follow the shenzhen-pdf
+run locally. For public distribution, run **`./package/sign-and-notarize.sh`** —
+one command that probes the keychain prompt-free (10-s timeout, aborts with the
+`security set-key-partition-list` fix if the key ACL would prompt), re-signs the
+whole bundle with Developer ID + hardened runtime, rebuilds and signs the DMG,
+notarizes with the stored keychain profile, staples, verifies Gatekeeper accepts
+a quarantined copy, clobbers the GitHub release asset, and re-checks the
+API sha256 digest the self-updater consumes.
+
+KEYCHAIN TRAP: if the Developer ID key was imported without partition IDs,
+EVERY codesign call raises a GUI password prompt and typing the password does
+NOT stick ("Allow" authorizes one use). Fix once, in your own terminal:
+
+```bash
+security set-key-partition-list -S apple-tool:,apple:,codesign: \
+  -s -k "<your login keychain password>" ~/Library/Keychains/login.keychain-db
+```
+
+The underlying pieces follow the shenzhen-pdf
 `portable/build-mac-release.sh` pattern:
 
 One-time setup:
