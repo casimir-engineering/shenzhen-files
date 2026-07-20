@@ -164,8 +164,10 @@ trap cleanup_q EXIT
 ditto "$mount_point/Shenzhen Files.app" "$qtest_dir/Shenzhen Files.app"
 hdiutil detach "$mount_point" >/dev/null
 mount_point=""
-# Quarantine flag as a browser download would set it (0087 = downloaded).
-xattr -w com.apple.quarantine "0087;$(printf '%x' "$(date +%s)");Safari;$(uuidgen)" \
+# Quarantine flag as a browser download would set it. 0081 = downloaded,
+# user-approval required. (NOT 0087: bit 0x0004 means "created by an App
+# Sandbox", which Gatekeeper hard-rejects regardless of notarization.)
+xattr -w com.apple.quarantine "0081;$(printf '%x' "$(date +%s)");Safari;$(uuidgen)" \
   "$qtest_dir/Shenzhen Files.app"
 verdict="$(spctl -a -vv "$qtest_dir/Shenzhen Files.app" 2>&1 || true)"
 echo "$verdict"
