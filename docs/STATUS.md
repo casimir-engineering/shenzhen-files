@@ -22,10 +22,10 @@ ported over:
 | Identity | `Shenzhen Files.app`, bundle id `com.intuition.shenzhenfiles` (mirrors `com.intuition.shenzhenpdf`), CFBundleName/DisplayName "Shenzhen Files"; version scheme is shenzhen-pdf's date-based `YY.M.DD` + `CFBundleVersion` build (tag `26.7.19-1`) |
 | Menu bar | Verified via System Events on the installed bundle: Apple · **Shenzhen Files** · File · Edit · View · Go · Window · Help; app menu = About Shenzhen Files / Check Permissions… / Finder Integration… / **Check for Updates…** / Settings… / … / Quit Shenzhen Files |
 | Logo / icon | `package/make-logo.swift` re-creates shenzhen-pdf's mark ("深圳" in #005C9C over a dark subtitle) with subtitle **Files**; `make-icon.sh` renders the full iconset natively per size → `AppIcon.icns` + `dmg-logo.png`; DMG background wordmark + accent switched to the Shenzhen blue |
-| Self-updater | `src/nautilus-macos-updater.m` — port of shenzhen-pdf `SPDFUpdater.mm` (silent daily check with flock'd 24h gate in `~/Library/Application Support/Shenzhen Files/update.json`, hourly re-arm + wake/day-change catch-ups, Install/Skip/Later alert, download panel, DMG mount + extract, detached `--post-update` helper doing the move-aside two-rename swap + relaunch + `.old` rollback handshake). Compiled **with ARC** as its own static lib (`libnautilus-macos-updater.a`) — the MRC bridge flags crash it (verified: SIGSEGV in the JSON parse without ARC). Trust model divergence (ad-hoc signing, no Developer ID): TLS to `api.github.com` + **required** sha256 asset digest from the GitHub API + bundle-id/version pin — shenzhen-pdf's Developer-ID/notarization verification does not apply |
+| Self-updater | `src/nautilus-macos-updater.m` — port of shenzhen-pdf `SPDFUpdater.mm` (silent daily check with flock'd 24h gate in `~/Library/Application Support/Shenzhen Files/update.json`, hourly re-arm + wake/day-change catch-ups, Install/Skip/Later alert, download panel, DMG mount + extract, detached `--post-update` helper doing the move-aside two-rename swap + relaunch + `.old` rollback handshake). Compiled **with ARC** as its own static lib (`libnautilus-macos-updater.a`) — the MRC bridge flags crash it (verified: SIGSEGV in the JSON parse without ARC). Trust model now matches shenzhen-pdf: offline Developer ID + notarization verification (Team ID pin 66LJ4BV7Q3, hardened-runtime + bundle-id pins); the GitHub sha256 digest is a corruption heuristic |
 | Update check verified | Fresh install → `update.json` gains `lastUpdateCheck` + the GitHub `ETag` after the 5-s idle check (HTTP 200, release JSON parsed, tag `26.7.19-1` == running version → up-to-date, silent). `releases/latest/download/ShenzhenFiles-mac-arm64.dmg` 302-resolves to the tag; published digest matches the local DMG sha256 |
 | Repo / release | Public repo `casimir-engineering/shenzhen-files` (package/, patches/, docs/, tools/ — upstream tree reproduced via `patches/macos-port-full.patch`); first release `26.7.19-1` ("26.7.19-1 - First release", shenzhen-pdf's format) with the DMG attached |
-| Installed | `/Applications/Shenzhen Files.app` (ad-hoc signed); old `/Applications/Nautilus.app` **removed**. ⚠ New bundle id + name = TCC resets: **Full Disk Access (and Accessibility for the save-panel handoff) must be re-granted** to Shenzhen Files. Config still lives under `~/.config/nautilus` (internal name unchanged) so preferences/integration state carry over |
+| Installed | `/Applications/Shenzhen Files.app` (**Developer ID signed + notarized**, team 66LJ4BV7Q3); old `/Applications/Nautilus.app` **removed**. ⚠ New bundle id + name = TCC resets: **Full Disk Access (and Accessibility for the save-panel handoff) must be re-granted** to Shenzhen Files. Config still lives under `~/.config/nautilus` (internal name unchanged) so preferences/integration state carry over |
 
 Port-controlled user-visible strings (FDA walkthrough, Finder-integration
 first-run + prefs, services error) now say "Shenzhen Files"; the GLib
@@ -831,3 +831,28 @@ real bundle + the user's Accessibility grant, which no agent can supply:
    `NSButtonCell trackMouse` modal loop (GDK steals the mouse-up), and the
    wedged process kept the bundle ID registered so relaunches were blocked.
    Window buttons are now GTK-drawn. See `docs/phase6-known-issues.md` #4.
+
+## Notarized release (2026-07-20)
+
+Gatekeeper hard-blocked the first (ad-hoc) download ("Apple could not verify…").
+Fixed by adopting shenzhen-pdf's actual release signing: Developer ID
+Application (INTUITION Robotique & Technologies, 66LJ4BV7Q3, login keychain)
++ `notarytool` keychain profile `shenzhenpdf-notary`, no entitlements,
+hardened runtime + secure timestamp on every Mach-O. One command now does the
+whole chain: `package/sign-and-notarize.sh` (prompt-probe → sign 80 Mach-Os →
+DMG → notarize → staple → Gatekeeper-simulate on a quarantined copy → clobber
+release asset → digest re-check → install). Verified 2026-07-20: notary
+submission `8b882586-68c2-47a8-97ed-e08176e9dc4f` **Accepted**; `spctl` says
+"accepted / Notarized Developer ID" for the DMG, for a quarantined app copy
+(0081 flag), and for the installed app; GitHub digest matches the local DMG.
+
+Keychain lesson (cost a prompt-loop): the Developer ID private key is labeled
+"Raphaël Casimir" in the login keychain; its partition list was fine but its
+application ACL lacked `/usr/bin/codesign`, so every codesign call prompted
+and password entry never stuck. Fix was one-time, via Keychain Access ▸ key ▸
+Access Control (no CLI exists for app ACLs). The sign-and-notarize.sh probe
+(10-s timeout on a throwaway binary) guards against ever looping on this again.
+
+TCC note: the identity change (ad-hoc → Developer ID) resets TCC once more —
+re-grant Full Disk Access (and Accessibility for the save-panel handoff).
+Future updates keep the same identity, so grants now persist across releases.

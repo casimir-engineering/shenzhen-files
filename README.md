@@ -24,24 +24,20 @@
 - **System integration, strictly opt-in** — open folders by default, sync Finder's sidebar favorites, hide the Finder desktop. Everything is off by default, revertible, and records the prior system state before changing anything.
 - **Trash, Show in Finder, Open in Terminal, "Open With" with real app icons** — all bridged to the native macOS services.
 - **Full Disk Access onboarding** — a one-time walkthrough for the TCC grant that browsing the Trash needs.
-- **Auto-update** — a silent daily check against GitHub releases plus a "Check for Updates…" menu item; updates download, verify (sha256 from the GitHub API), swap the bundle and relaunch in place.
+- **Auto-update** — a silent daily check against GitHub releases plus a "Check for Updates…" menu item; updates download, verify offline (Developer ID + notarization, pinned Team ID and bundle id), swap the bundle and relaunch in place.
 
 ## Install
 
 Download the DMG above and drag **Shenzhen Files** onto **Applications**.
 
-### First launch
+Releases are signed with Developer ID and notarized by Apple, so the app opens normally after download — no Gatekeeper workarounds needed.
 
-If macOS blocks the app with *“Apple could not verify 'Shenzhen Files' is free of malware”* (the download is quarantined and the build is not notarized yet):
+<details>
+<summary>First launch of an old, un-notarized build</summary>
 
-1. Click **Done** (not *Move to Trash*), then open **System Settings ▸ Privacy & Security**, scroll down to the message about Shenzhen Files, and click **Open Anyway**. On macOS 15 and later this is the only supported path — the old right-click ▸ Open bypass no longer works for unsigned/un-notarized apps.
-2. Terminal alternative (removes the quarantine flag instead):
+If macOS blocks an older build with *“Apple could not verify 'Shenzhen Files' is free of malware”*: click **Done** (not *Move to Trash*), open **System Settings ▸ Privacy & Security**, scroll to the Shenzhen Files message, and click **Open Anyway** (on macOS 15+ the old right-click ▸ Open bypass no longer works). Terminal alternative: `xattr -d com.apple.quarantine "/Applications/Shenzhen Files.app"`. Better: just re-download the current notarized DMG.
 
-```bash
-xattr -d com.apple.quarantine "/Applications/Shenzhen Files.app"
-```
-
-Notarized releases (signed with Developer ID) open normally with no extra steps — check the release notes of the version you downloaded.
+</details>
 
 For Trash browsing, grant Full Disk Access when the app offers the walkthrough (System Settings ▸ Privacy & Security ▸ Full Disk Access).
 
@@ -69,7 +65,7 @@ See [`package/README.md`](package/README.md) for the packaging details and [`doc
 
 ## Updater trust model
 
-Releases are moving to Developer ID signing + notarization (the same setup as Shenzhen PDF); the updater verifies each downloaded update offline with Security.framework — full Developer ID requirement with a pinned Team ID, a stapled-notarization check on the DMG, and hardened-runtime + bundle-id pins on the extracted app. The sha256 digest from the GitHub API is checked as a corruption heuristic. The swap is a move-aside two-rename with rollback, and the relaunched app confirms the version before the previous bundle is discarded. Release signing runs through `package/sign-and-notarize.sh` (sign every Mach-O with hardened runtime → styled DMG → `notarytool` → staple → Gatekeeper-simulate on a quarantined copy → publish).
+Releases are signed with Developer ID and notarized (the same setup as Shenzhen PDF); the updater verifies each downloaded update offline with Security.framework — full Developer ID requirement with a pinned Team ID, a stapled-notarization check on the DMG, and hardened-runtime + bundle-id pins on the extracted app. The sha256 digest from the GitHub API is checked as a corruption heuristic. The swap is a move-aside two-rename with rollback, and the relaunched app confirms the version before the previous bundle is discarded. Release signing runs through `package/sign-and-notarize.sh` (sign every Mach-O with hardened runtime → styled DMG → `notarytool` → staple → Gatekeeper-simulate on a quarantined copy → publish).
 
 ## License
 
