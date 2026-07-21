@@ -856,3 +856,22 @@ Access Control (no CLI exists for app ACLs). The sign-and-notarize.sh probe
 TCC note: the identity change (ad-hoc → Developer ID) resets TCC once more —
 re-grant Full Disk Access (and Accessibility for the save-panel handoff).
 Future updates keep the same identity, so grants now persist across releases.
+
+## Hardened-runtime startup crash fixed (2026-07-21)
+
+The first notarized 26.7.19-1 download crashed at startup (SIGABRT in
+libtinysparql `ensure_init_parser`, via `nautilus_tag_manager_init`). Root
+cause: libtinysparql loads its parser/collation module
+(`libtracker-parser-libicu.so`) from a compile-time-baked absolute Homebrew
+path with no env override, and the port never bundled it — so it relied on
+the dev machine's Homebrew, and under the hardened runtime's Library
+Validation the ad-hoc-signed Homebrew module can't be dlopen'd at all. Fix:
+bundle the module (`make-app.sh`), binary-patch libtinysparql's baked path to
+`@executable_path/../Resources/lib/tinysparql-3.0` and re-sign the module with
+our Team ID (`bundle-dylibs.sh`), plus a darwin preflight in
+`nautilus-tag-manager.c` that degrades to "starring disabled" instead of
+aborting if the module is ever unloadable. `sign-and-notarize.sh` now runs a
+launch smoke test on the quarantined copy so this class of bug can't ship
+again. Re-notarized (submission `b666c1f7-…`, Accepted) and re-released; the
+quarantined download launches cleanly and the tag DB initializes. See
+docs/phase6-known-issues.md §7.

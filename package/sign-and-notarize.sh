@@ -177,6 +177,38 @@ echo "$verdict" | grep -q "Notarized Developer ID" \
   || fail "Gatekeeper simulation FAILED: source is not 'Notarized Developer ID'."
 log "Quarantined copy accepted as Notarized Developer ID."
 
+# Launch smoke test: an accepted signature is NOT proof the app RUNS (the
+# hardened runtime can still SIGABRT on a dlopen Library Validation rejection,
+# which is exactly how the 26.7.19-1 tag-manager crash slipped through). Launch
+# the quarantined copy in the background, give it time to reach steady state,
+# and require that it is still alive with NO fresh crash report.
+log "Launch smoke test on the quarantined copy…"
+crash_dir="$HOME/Library/Logs/DiagnosticReports"
+before_crashes="$(ls -1 "$crash_dir"/nautilus-*.ips 2>/dev/null | wc -l | tr -d ' ')"
+# Isolate from the dev D-Bus so this can't touch the user's running instance.
+# NOTE: `open` on a quarantined bundle in a non-standard location triggers
+# Gatekeeper App Translocation — the app actually runs from a read-only
+# /private/var/folders/.../AppTranslocation/... path, NOT from $qtest_dir. So
+# match the process by bundle name anywhere, and treat a NEW crash report as
+# the authoritative failure signal (a hardened-runtime dlopen rejection SIGABRTs
+# within ~2 s, which is exactly the class of bug this test exists to catch).
+DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/szf-smoke-nobus.sock" \
+  open -g -n "$qtest_dir/Shenzhen Files.app" 2>/dev/null || true
+sleep 8
+smoke_pids="$(pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus-launcher" || true)"
+smoke_pids="$smoke_pids $(pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus" || true)"
+after_crashes="$(ls -1 "$crash_dir"/nautilus-*.ips 2>/dev/null | wc -l | tr -d ' ')"
+# Tear the smoke instance down no matter what (covers the translocated path).
+for pid in $smoke_pids; do kill "$pid" 2>/dev/null || true; done
+sleep 1
+pkill -f "Shenzhen Files.app/Contents/MacOS" 2>/dev/null || true
+if [[ "$after_crashes" -gt "$before_crashes" ]]; then
+  fail "Launch smoke test FAILED: a new crash report appeared (the quarantined app crashed on launch)."
+fi
+[[ -n "$(echo "$smoke_pids" | tr -d ' ')" ]] \
+  || fail "Launch smoke test FAILED: the quarantined app was not running after 8 s."
+log "Quarantined copy launched and stayed alive (no new crash) — killed."
+
 # ---------------------------------------------------------------------------
 # 6. Publish: clobber the release asset, re-verify the updater metadata
 # ---------------------------------------------------------------------------

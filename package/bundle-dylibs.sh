@@ -224,6 +224,62 @@ if bad:
 print("audit OK: all load commands are @executable_path or system")
 PYEOF
 
+# --- redirect libtinysparql's baked parser-module path into the bundle -----------
+# libtinysparql opens its collation/parser module (libtracker-parser-libicu.so)
+# with g_module_open() at a HARD-CODED absolute path baked at compile time:
+#   <brew>/Cellar/tinysparql/<ver>/lib/tinysparql-3.0/%s
+# (see src/common/tracker-parser.c: ensure_init_parser; no env override). That
+# path is absent on a clean Mac AND its Homebrew module is ad-hoc signed, which
+# the hardened runtime's Library Validation refuses to dlopen — either way
+# g_module_open returns NULL, libtinysparql g_assert()s, and the app SIGABRTs
+# at startup inside nautilus_tag_manager_init. make-app.sh bundled the module
+# under Resources/lib/tinysparql-3.0; here we rewrite the baked string in the
+# bundled libtinysparql to a bundle-relative @executable_path path (dlopen
+# resolves @executable_path even under the hardened runtime). The replacement
+# is SHORTER than the original, so it fits in place (NUL-padded) — no Mach-O
+# resizing. Must run BEFORE signing so the signature covers the patched bytes.
+python3 - "$APP" <<'PYEOF'
+import os, sys, glob
+app = os.path.abspath(sys.argv[1])
+lib = os.path.join(app, "Contents", "Frameworks", "libtinysparql-3.0.0.dylib")
+if not os.path.exists(lib):
+    print(f"error: bundled libtinysparql not found: {lib}", file=sys.stderr)
+    sys.exit(1)
+
+data = bytearray(open(lib, "rb").read())
+# The literal is `PRIVATE_LIBDIR "/%s"` = ".../lib/tinysparql-3.0/%s".
+needle = b"/lib/tinysparql-3.0/%s\x00"
+repl_path = b"@executable_path/../Resources/lib/tinysparql-3.0/%s\x00"
+
+# Find every C string ending in "/lib/tinysparql-3.0/%s" and replace the whole
+# NUL-terminated string in place (walk back to the byte after the preceding
+# NUL to get the string start).
+patched = 0
+start = 0
+while True:
+    idx = data.find(needle, start)
+    if idx < 0:
+        break
+    s = data.rfind(b"\x00", 0, idx) + 1
+    e = data.find(b"\x00", idx)              # NUL that terminates it
+    field_len = e - s + 1                    # include the terminator slot
+    if len(repl_path) > field_len:
+        print(f"error: replacement too long ({len(repl_path)} > {field_len})", file=sys.stderr)
+        sys.exit(1)
+    data[s:s + len(repl_path)] = repl_path
+    # NUL-pad the remainder of the old field so no stale tail bytes remain.
+    for k in range(s + len(repl_path), s + field_len):
+        data[k] = 0
+    patched += 1
+    start = e + 1
+
+if patched == 0:
+    print("error: baked tinysparql module path not found in libtinysparql", file=sys.stderr)
+    sys.exit(1)
+open(lib, "wb").write(data)
+print(f"patched libtinysparql parser-module path -> @executable_path (x{patched})")
+PYEOF
+
 # --- codesign: nested Mach-Os first, then the bundle ----------------------------
 # DEFAULT = ad-hoc (`codesign --sign -`): the ONLY thing arm64 strictly needs
 # after install_name_tool, and it NEVER prompts for a password. This script

@@ -168,6 +168,24 @@ if grep -qE '^"/.*\.(so|dylib)"' "$PIXBUF_DIR/loaders.cache"; then
   exit 1
 fi
 
+# tinysparql (tracker) parser module. TRAP: libtinysparql loads its
+# collation/parser module (libtracker-parser-libicu.so) via g_module_open()
+# from a HARD-CODED absolute path baked at compile time
+# (PRIVATE_LIBDIR = <brew>/Cellar/tinysparql/<ver>/lib/tinysparql-3.0), with
+# no env override. That path only exists on a machine with Homebrew's
+# tinysparql, so the tag DB (starring) crashes on any clean Mac; and under
+# the hardened runtime + Developer ID signing, Library Validation refuses to
+# load the ad-hoc-signed Homebrew module even where the path DOES exist —
+# g_module_open returns NULL and libtinysparql g_assert()s → SIGABRT at
+# startup (nautilus_tag_manager_init). Fix: bundle the module here, then
+# bundle-dylibs.sh (a) re-signs it with our identity so Library Validation
+# accepts it and (b) binary-patches the baked path in the bundled
+# libtinysparql to @executable_path/../Resources/lib/tinysparql-3.0.
+TSPARQL_MODDIR="$RES/lib/tinysparql-3.0"
+mkdir -p "$TSPARQL_MODDIR"
+cp -L "$BREW/lib/tinysparql-3.0/libtracker-parser-libicu.so" "$TSPARQL_MODDIR/"
+chmod -R u+w "$TSPARQL_MODDIR"
+
 # GIO modules (TLS backend). TRAP: giomodule.cache — regenerate in the bundle;
 # entries are basenames, so the cache itself is relocatable.
 GIO_DIR="$RES/lib/gio/modules"

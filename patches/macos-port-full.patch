@@ -13039,10 +13039,93 @@ index c9bd4a6..36e9ad0 100644
          call_open_location (sidebar, location, NULL, open_flags);
      }
 diff --git a/src/nautilus-tag-manager.c b/src/nautilus-tag-manager.c
-index c34a17c..8290f9c 100644
+index c34a17c..58e9ea6 100644
 --- a/src/nautilus-tag-manager.c
 +++ b/src/nautilus-tag-manager.c
-@@ -672,6 +672,21 @@ setup_database (NautilusTagManager  *self,
+@@ -29,6 +29,10 @@
+ 
+ #include "config.h"
+ 
++#ifdef __APPLE__
++#include <gmodule.h>
++#endif
++
+ struct _NautilusTagManager
+ {
+     GObject object;
+@@ -658,12 +662,71 @@ nautilus_tag_manager_get (void)
+     return tag_manager;
+ }
+ 
++#ifdef __APPLE__
++#include <mach-o/dyld.h>
++#include <limits.h>
++#include <stdlib.h>
++#include <string.h>
++
++/* libtinysparql loads its collation/parser module (libtracker-parser-libicu.so)
++ * with g_module_open() and, if that returns NULL, g_assert()s — which aborts
++ * the whole process from inside the library (uncatchable via GError). In the
++ * relocatable .app the module is bundled under Resources/lib/tinysparql-3.0 and
++ * bundle-dylibs.sh rewrites libtinysparql's baked lookup path to
++ * @executable_path/../Resources/lib/tinysparql-3.0. This preflight verifies the
++ * module is actually loadable BEFORE we hand control to libtinysparql, so a
++ * packaging regression degrades to "starring disabled" instead of a crash.
++ * Only meaningful inside the bundle; dev runs (no .app) fall through and use
++ * libtinysparql's own Homebrew default path. */
++static gboolean
++macos_tracker_parser_module_loadable (void)
++{
++    char exe[PATH_MAX];
++    uint32_t size = sizeof exe;
++
++    if (_NSGetExecutablePath (exe, &size) != 0)
++    {
++        return TRUE;  /* can't tell; don't block the normal path */
++    }
++
++    g_autofree char *real_exe = realpath (exe, NULL);
++    if (real_exe == NULL || strstr (real_exe, ".app/Contents/MacOS/") == NULL)
++    {
++        return TRUE;  /* not a bundle run — leave it to libtinysparql */
++    }
++
++    g_autofree char *macos_dir = g_path_get_dirname (real_exe);
++    g_autofree char *module_path =
++        g_build_filename (macos_dir, "..", "Resources", "lib", "tinysparql-3.0",
++                          "libtracker-parser-libicu.so", NULL);
++
++    GModule *module = g_module_open (module_path, G_MODULE_BIND_LAZY | G_MODULE_BIND_LOCAL);
++    if (module == NULL)
++    {
++        g_warning ("tag manager: tracker parser module not loadable (%s): %s",
++                   module_path, g_module_error ());
++        return FALSE;
++    }
++    g_module_close (module);
++    return TRUE;
++}
++#endif /* __APPLE__ */
++
+ static gboolean
+ setup_database (NautilusTagManager  *self,
+                 GCancellable        *cancellable,
+                 GError             **error)
+ {
+     const gchar *datadir;
++
++#ifdef __APPLE__
++    if (!macos_tracker_parser_module_loadable ())
++    {
++        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
++                             "tracker parser module unavailable; starring disabled");
++        return FALSE;
++    }
++#endif
+     g_autofree gchar *store_path = NULL;
+     g_autofree gchar *ontology_path = NULL;
+     g_autoptr (GFile) store = NULL;
+@@ -672,6 +735,21 @@ setup_database (NautilusTagManager  *self,
      /* Open private database to store nautilus:starred property. */
  
      datadir = NAUTILUS_DATADIR;

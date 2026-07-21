@@ -144,3 +144,59 @@ Binary: `build/src/nautilus` (arm64, `debugoptimized`, `-Dmacos_port=true`).
   with `EXC_BAD_ACCESS address=0x38` (exact user crash). Fixed binary:
   `slot.back` enabled = 0 and the call returns cleanly.
 - **Upstreamable:** yes — both halves apply to GNOME nautilus unmodified.
+
+## 7. Startup SIGABRT under hardened runtime: bundled tracker parser module — FIXED (2026-07-21)
+
+- **Symptom:** the Developer ID-signed + notarized 26.7.19-1 build, once
+  downloaded (quarantined) and installed, aborted ~2 s after launch.
+  Crash: `abort()` ← `g_assertion_message_expr` ← `ensure_init_parser+248`
+  ← `tracker_collation_init` ← `tracker_db_interface_sqlite_reset_collator`
+  ← … ← `tracker_direct_connection_new` ← `nautilus_tag_manager_init`
+  ← `nautilus_application_init` ← main
+  (incident `4ECAD4A3-…`, pid 35533). The ad-hoc builds never hit it.
+- **Root cause (two faults, the second unmasked by signing):**
+  1. libtinysparql loads its collation/parser module
+     `libtracker-parser-libicu.so` via `g_module_open()` at a **hard-coded
+     absolute path baked at compile time** — `PRIVATE_LIBDIR` =
+     `<brew>/Cellar/tinysparql/<ver>/lib/tinysparql-3.0` (see
+     `src/common/tracker-parser.c: ensure_init_parser`; there is NO env
+     override). The port never bundled that module, so the path only exists
+     on a machine with Homebrew's tinysparql. On the dev machine it did, so
+     ad-hoc builds "worked for days" — but it would crash on any clean Mac.
+     `ensure_init_parser` `g_assert(module != NULL)`s on failure, aborting
+     the whole process from *inside* the library (uncatchable via GError).
+  2. The **hardened runtime enables Library Validation** (we ship no
+     entitlements, matching Shenzhen PDF). Even where the Homebrew module
+     path exists, that module is **ad-hoc signed** (no Team ID), so
+     `dlopen` is refused → `g_module_open` returns NULL → same assert. This
+     is why the crash appeared exactly when we moved to Developer ID +
+     hardened runtime. (It was NOT `DYLD_*` env stripping — the launcher
+     sets no `DYLD_*` vars.)
+- **Fix (structural, keeps signing/notarization):**
+  - `package/make-app.sh` bundles `libtracker-parser-libicu.so` into
+    `Contents/Resources/lib/tinysparql-3.0/`.
+  - `package/bundle-dylibs.sh` binary-patches the baked lookup string in the
+    bundled `libtinysparql-3.0.0.dylib` from the absolute Homebrew Cellar
+    path to `@executable_path/../Resources/lib/tinysparql-3.0` (the
+    replacement is shorter, so it fits in place, NUL-padded — no Mach-O
+    resize; done BEFORE signing). `dlopen` resolves `@executable_path` even
+    under the hardened runtime; the BFS then rewrites the module's own
+    deps to `@executable_path/../Frameworks` and re-signs it with our Team
+    ID, so Library Validation accepts it.
+  - Safety net (`nautilus-tag-manager.c`, darwin-only): a preflight
+    `g_module_open` of the bundled module before handing control to
+    libtinysparql. If it ever fails to load again, `setup_database` returns
+    a GError and starring degrades to disabled with a `g_warning`, instead
+    of the library aborting the app. (A `g_assert` inside a dependency can't
+    be caught after the fact; this is why the preflight, not a try/catch.)
+  - `package/sign-and-notarize.sh` gained a **launch smoke test**: it
+    background-launches the quarantined app copy, waits, and fails the
+    release if a new crash report appears or the process isn't alive — the
+    exact check whose absence let this ship.
+- **Verified 2026-07-21:** notarized quarantined copy (App-Translocated by
+  Gatekeeper, as a real download would be) launches and stays alive with no
+  new crash; `~/Library/Application Support/nautilus/tags/meta.db` is created
+  (starring works); module loads from inside the bundle.
+- **Upstreamable:** the packaging fix is port-specific. The
+  `ensure_init_parser` hard-abort is arguably a tinysparql robustness bug
+  (a missing optional module should not abort the host app).
