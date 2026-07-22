@@ -3310,6 +3310,49 @@ index ca08bfa..f3c94e2 100644
  
  #define NAUTILUS_WINDOW_STATE_INITIAL_SIZE_FILE_CHOOSER         "initial-size-file-chooser"
  
+diff --git a/src/nautilus-grid-cell.c b/src/nautilus-grid-cell.c
+index f7cf26e..b40434e 100644
+--- a/src/nautilus-grid-cell.c
++++ b/src/nautilus-grid-cell.c
+@@ -15,6 +15,10 @@
+ #include "nautilus-view-item.h"
+ #include "nautilus-view-cell.h"
+ 
++#ifdef __APPLE__
++#include "nautilus-list-base-private.h"
++#endif
++
+ struct _NautilusGridCell
+ {
+     NautilusViewCell parent_instance;
+@@ -26,6 +30,7 @@ struct _NautilusGridCell
+     GtkWidget *icon;
+     GtkWidget *emblems_box;
+     GtkWidget *labels_box;
++    GtkWidget *label;
+     GtkWidget *caption_labels[NAUTILUS_GRID_CELL_N_CAPTIONS];
+ 
+     gboolean in_file_change;
+@@ -479,6 +484,7 @@ nautilus_grid_cell_class_init (NautilusGridCellClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, icon);
+     gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, emblems_box);
+     gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, labels_box);
++    gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, label);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, on_label_query_tooltip);
+ 
+@@ -514,6 +520,11 @@ nautilus_grid_cell_init (NautilusGridCell *self)
+     g_object_bind_property (self, "item",
+                             self->item_signal_group, "target",
+                             G_BINDING_SYNC_CREATE);
++
++#ifdef __APPLE__
++    /* macOS port: Finder-style slow second click on the name renames. */
++    setup_cell_slow_click_rename (NAUTILUS_VIEW_CELL (self), self->label);
++#endif
+ }
+ 
+ NautilusGridCell *
 diff --git a/src/nautilus-icon-info.c b/src/nautilus-icon-info.c
 index 278efb9..630dfab 100644
 --- a/src/nautilus-icon-info.c
@@ -3427,6 +3470,427 @@ index f83b520..b36f4d2 100644
 +#endif
 +
  G_END_DECLS
+diff --git a/src/nautilus-list-base-private.h b/src/nautilus-list-base-private.h
+index 6209de0..ec2a4db 100644
+--- a/src/nautilus-list-base-private.h
++++ b/src/nautilus-list-base-private.h
+@@ -29,4 +29,11 @@ void                          setup_cell_common                 (GObject
+                                                                  NautilusViewCell *cell,
+                                                                  GtkWidget        *hover_target);
+ 
++#ifdef __APPLE__
++/* macOS port: Finder-style "slow second click on the name renames".
++ * Called by cell widgets (name cell, grid cell) on their name label. */
++void                          setup_cell_slow_click_rename      (NautilusViewCell *cell,
++                                                                 GtkWidget        *name_label);
++#endif
++
+ G_END_DECLS
+diff --git a/src/nautilus-list-base.c b/src/nautilus-list-base.c
+index 608e4fc..bc3a370 100644
+--- a/src/nautilus-list-base.c
++++ b/src/nautilus-list-base.c
+@@ -24,9 +24,20 @@
+ #include <gdk/x11/gdkx.h>
+ #endif
+ 
++#ifdef __APPLE__
++#include <CoreFoundation/CoreFoundation.h>
++#endif
++
+ /* 1 page worth of scroll in 100ms zooms in or out when the ctrl key is held */
+ #define SCROLL_TO_ZOOM_INTERVAL 100
+ 
++#ifdef __APPLE__
++/* macOS port: Finder-style slow second click on the name renames.
++ * Margin added on top of the system double-click interval before the
++ * rename fires, so a double-click (which opens) can never race it. */
++#define SLOW_RENAME_DCT_MARGIN_MS 100
++#endif
++
+ /**
+  * NautilusListBase:
+  *
+@@ -63,6 +74,15 @@ struct _NautilusListBasePrivate
+ 
+     gdouble amount_scrolled_for_zoom;
+     guint scroll_timeout_id;
++
++#ifdef __APPLE__
++    /* macOS port: Finder-style slow-click-to-rename state (at most one
++     * candidate click and one pending rename trigger per view). */
++    gboolean slow_rename_candidate;
++    guint slow_rename_timeout_id;
++    guint slow_rename_position;
++    NautilusViewModel *slow_rename_model; /* Owned while armed */
++#endif
+ };
+ 
+ G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (NautilusListBase, nautilus_list_base, ADW_TYPE_BIN)
+@@ -218,6 +238,287 @@ rubberband_set_state (NautilusListBase *self,
+     NAUTILUS_LIST_BASE_CLASS (G_OBJECT_GET_CLASS (self))->set_enable_rubberband (self, enabled);
+ }
+ 
++#ifdef __APPLE__
++
++/* === macOS port: Finder-style slow second click on the name renames ===
++ *
++ * Finder behavior: a single click selects an item; a second, separate
++ * primary-button click on the item's NAME (not the icon), landing after the
++ * double-click interval, puts the name into inline edit mode. A second click
++ * inside the double-click interval is a double-click and opens the item.
++ *
++ * Implementation: the cells attach a non-claiming click gesture to their name
++ * label (setup_cell_slow_click_rename()). A press records whether the item
++ * was ALREADY the single selected item before this click (the click that
++ * selects never arms). A clean release then arms a one-shot timeout of
++ * (double-click time + margin); when it fires, the existing files-view
++ * "rename" action (same as F2) opens the rename popover. Any disqualifying
++ * event — another click, a double-click, a drag, a keypress, a selection
++ * change, scrolling, or navigation — cancels the pending trigger.
++ */
++
++static guint
++slow_rename_system_double_click_time_ms (void)
++{
++    /* This is the same global preference NSEvent's doubleClickInterval is
++     * backed by; 0.5 s is the documented AppKit fallback when unset. */
++    double threshold = 0.5;
++    CFPropertyListRef value = CFPreferencesCopyAppValue (CFSTR ("com.apple.mouse.doubleClickThreshold"),
++                                                         kCFPreferencesAnyApplication);
++
++    if (value != NULL)
++    {
++        if (CFGetTypeID (value) == CFNumberGetTypeID ())
++        {
++            CFNumberGetValue ((CFNumberRef) value, kCFNumberDoubleType, &threshold);
++        }
++        CFRelease (value);
++    }
++
++    return (guint) (CLAMP (threshold, 0.15, 2.0) * 1000.0);
++}
++
++static guint
++slow_rename_delay_ms (GtkWidget *widget)
++{
++    GtkSettings *settings = gtk_widget_get_settings (widget);
++    static gsize synced = 0;
++    int dct = 400;
++
++    /* GDK's macOS backend does not map the system double-click interval into
++     * the gtk-double-click-time setting (verified against GTK 4.22.4: no
++     * doubleClickInterval use anywhere), so sync it once from the system
++     * preference backing NSEvent's doubleClickInterval. This keeps GTK's own
++     * double-click (open) detection and the rename delay on the same clock,
++     * both matching the user's system setting. */
++    if (g_once_init_enter (&synced))
++    {
++        g_object_set (settings,
++                      "gtk-double-click-time", (int) slow_rename_system_double_click_time_ms (),
++                      NULL);
++        g_once_init_leave (&synced, 1);
++    }
++
++    g_object_get (settings, "gtk-double-click-time", &dct, NULL);
++
++    return (guint) CLAMP (dct, 100, 5000) + SLOW_RENAME_DCT_MARGIN_MS;
++}
++
++/* Cancels the pending rename trigger, if any. Does NOT touch
++ * slow_rename_candidate: that press-to-release flag is owned by the name
++ * label gesture handlers below. */
++static void
++slow_rename_cancel (NautilusListBase *self)
++{
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++
++    if (priv->slow_rename_timeout_id != 0)
++    {
++        g_debug ("slow-rename: cancelled pending trigger for position %u",
++                 priv->slow_rename_position);
++    }
++
++    g_clear_handle_id (&priv->slow_rename_timeout_id, g_source_remove);
++    if (priv->slow_rename_model != NULL)
++    {
++        g_signal_handlers_disconnect_by_func (priv->slow_rename_model,
++                                              slow_rename_cancel, self);
++        g_clear_object (&priv->slow_rename_model);
++    }
++}
++
++static gboolean
++slow_rename_on_key_pressed (GtkEventControllerKey *controller,
++                            guint                  keyval,
++                            guint                  keycode,
++                            GdkModifierType        state,
++                            gpointer               user_data)
++{
++    slow_rename_cancel (NAUTILUS_LIST_BASE (user_data));
++
++    return GDK_EVENT_PROPAGATE;
++}
++
++static void
++slow_rename_timeout (gpointer user_data)
++{
++    NautilusListBase *self = NAUTILUS_LIST_BASE (user_data);
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++    gboolean still_valid = FALSE;
++
++    priv->slow_rename_timeout_id = 0;
++
++    /* Re-verify at fire time: same model, and the armed item is still the
++     * single selected item. */
++    if (priv->slow_rename_model == priv->model && priv->model != NULL)
++    {
++        g_autoptr (GtkBitset) selection = gtk_selection_model_get_selection (GTK_SELECTION_MODEL (priv->model));
++
++        still_valid = (gtk_bitset_get_size (selection) == 1 &&
++                       gtk_bitset_contains (selection, priv->slow_rename_position));
++    }
++
++    slow_rename_cancel (self);
++
++    if (still_valid)
++    {
++        g_debug ("slow-rename: firing rename for position %u",
++                 priv->slow_rename_position);
++
++        /* Same action as F2, so validation and behavior are identical. It is
++         * a no-op if the files view has disabled it (e.g. non-renamable). */
++        gtk_widget_activate_action (GTK_WIDGET (self), "view.rename", NULL);
++    }
++}
++
++static void
++on_cell_name_click_pressed (GtkGestureClick *gesture,
++                            gint             n_press,
++                            gdouble          x,
++                            gdouble          y,
++                            gpointer         user_data)
++{
++    NautilusViewCell *cell = user_data;
++    NautilusListBase *self = nautilus_view_cell_get_view (cell);
++
++    if (self == NULL)
++    {
++        return;
++    }
++
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++    GdkModifierType modifiers;
++    guint position;
++
++    /* Any new click cancels a previously pending rename trigger. */
++    slow_rename_cancel (self);
++    priv->slow_rename_candidate = FALSE;
++
++    if (n_press != 1 ||     /* Part of a double-click: that's an open. */
++        priv->single_click_mode ||
++        priv->model == NULL)
++    {
++        return;
++    }
++
++    modifiers = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (gesture));
++    if (modifiers & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK |
++                     GDK_SUPER_MASK | GDK_META_MASK))
++    {
++        return;
++    }
++
++    position = nautilus_view_cell_get_position (cell);
++
++    g_autoptr (GtkBitset) selection = gtk_selection_model_get_selection (GTK_SELECTION_MODEL (priv->model));
++
++    /* Only a click on the item that was ALREADY the single selected item
++     * before this click may arm the rename. The click that selects, a click
++     * during multi-selection, and a click on an unselected item never arm. */
++    if (gtk_bitset_get_size (selection) == 1 &&
++        gtk_bitset_contains (selection, position))
++    {
++        priv->slow_rename_candidate = TRUE;
++        priv->slow_rename_position = position;
++    }
++}
++
++static void
++on_cell_name_click_released (GtkGestureClick *gesture,
++                             gint             n_press,
++                             gdouble          x,
++                             gdouble          y,
++                             gpointer         user_data)
++{
++    NautilusViewCell *cell = user_data;
++    NautilusListBase *self = nautilus_view_cell_get_view (cell);
++
++    if (self == NULL)
++    {
++        return;
++    }
++
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++    gboolean candidate = priv->slow_rename_candidate;
++
++    priv->slow_rename_candidate = FALSE;
++
++    /* A drag never gets here (the gesture is cancelled, so there is no
++     * release); a double-click was disqualified at press time. */
++    if (!candidate || n_press != 1 || priv->model == NULL ||
++        nautilus_view_cell_get_position (cell) != priv->slow_rename_position)
++    {
++        return;
++    }
++
++    g_autoptr (GtkBitset) selection = gtk_selection_model_get_selection (GTK_SELECTION_MODEL (priv->model));
++
++    if (gtk_bitset_get_size (selection) != 1 ||
++        !gtk_bitset_contains (selection, priv->slow_rename_position))
++    {
++        return;
++    }
++
++    /* Arm the one-shot rename trigger; cancel it if the selection changes
++     * in the meanwhile. (Keypresses, scrolling, navigation and further
++     * clicks are hooked up once per view, see nautilus_list_base_init(),
++     * base_setup_directory() and the item/view click handlers.) */
++    priv->slow_rename_model = g_object_ref (priv->model);
++    g_signal_connect_swapped (priv->slow_rename_model, "selection-changed",
++                              G_CALLBACK (slow_rename_cancel), self);
++    priv->slow_rename_timeout_id = g_timeout_add_once (slow_rename_delay_ms (GTK_WIDGET (self)),
++                                                       slow_rename_timeout, self);
++
++    g_debug ("slow-rename: armed for position %u (delay %u ms)",
++             priv->slow_rename_position, slow_rename_delay_ms (GTK_WIDGET (self)));
++}
++
++static void
++on_cell_name_click_stopped (GtkGestureClick *gesture,
++                            gpointer         user_data)
++{
++    NautilusViewCell *cell = user_data;
++    NautilusListBase *self = nautilus_view_cell_get_view (cell);
++
++    if (self == NULL)
++    {
++        return;
++    }
++
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++
++    /* Covers the drag case: the gesture is cancelled, so no release and no
++     * arming; drop the press-time candidate flag. */
++    priv->slow_rename_candidate = FALSE;
++}
++
++/**
++ * setup_cell_slow_click_rename:
++ * @cell: the cell owning @name_label
++ * @name_label: the label displaying the file's name
++ *
++ * macOS port: attaches the non-claiming gesture implementing Finder's
++ * "slow second click on the name renames" to the cell's name label.
++ * Normal selection/activation machinery is unaffected (the gesture never
++ * claims the sequence).
++ */
++void
++setup_cell_slow_click_rename (NautilusViewCell *cell,
++                              GtkWidget        *name_label)
++{
++    GtkGesture *gesture = gtk_gesture_click_new ();
++
++    gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), GDK_BUTTON_PRIMARY);
++    gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (gesture),
++                                                GTK_PHASE_BUBBLE);
++    g_signal_connect (gesture, "pressed", G_CALLBACK (on_cell_name_click_pressed), cell);
++    g_signal_connect (gesture, "released", G_CALLBACK (on_cell_name_click_released), cell);
++    g_signal_connect (gesture, "stopped", G_CALLBACK (on_cell_name_click_stopped), cell);
++    gtk_widget_add_controller (name_label, GTK_EVENT_CONTROLLER (gesture));
++}
++
++#endif /* __APPLE__ */
++
+ /**
+  * nautilus_list_base_add_overlay:
+  * @self: a `NautilusListBase` instance
+@@ -256,6 +557,13 @@ on_item_click_pressed (GtkGestureClick *gesture,
+     GdkModifierType modifiers;
+     gboolean selection_mode;
+ 
++#ifdef __APPLE__
++    /* Any click cancels a pending slow-click rename trigger. (The name-label
++     * gesture ran first — deeper widget — and may have recorded a new
++     * candidate; this only cancels the pending timeout.) */
++    slow_rename_cancel (self);
++#endif
++
+     button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (gesture));
+     modifiers = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (gesture));
+     selection_mode = (modifiers & (GDK_CONTROL_MASK | GDK_SHIFT_MASK));
+@@ -359,6 +667,12 @@ on_view_click_pressed (GtkGestureClick *gesture,
+     GdkModifierType modifiers;
+     gboolean selection_mode;
+ 
++#ifdef __APPLE__
++    /* A background click (incl. rubberband start) cancels a pending
++     * slow-click rename trigger. */
++    slow_rename_cancel (self);
++#endif
++
+     if (priv->deny_background_click)
+     {
+         /* Item was clicked. */
+@@ -934,6 +1248,11 @@ base_setup_directory (NautilusListBase  *self,
+ {
+     NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
+ 
++#ifdef __APPLE__
++    /* Navigation cancels a pending slow-click rename trigger. */
++    slow_rename_cancel (self);
++#endif
++
+     g_clear_object (&priv->directory_as_file);
+     priv->directory_as_file = nautilus_directory_get_corresponding_file (directory);
+ 
+@@ -1064,6 +1383,10 @@ nautilus_list_base_dispose (GObject *object)
+     NautilusListBase *self = NAUTILUS_LIST_BASE (object);
+     NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
+ 
++#ifdef __APPLE__
++    slow_rename_cancel (self);
++#endif
++
+     g_clear_object (&priv->directory_as_file);
+     g_clear_object (&priv->model);
+     g_clear_handle_id (&priv->hover_timer_id, g_source_remove);
+@@ -1329,6 +1652,25 @@ nautilus_list_base_init (NautilusListBase *self)
+                              G_CALLBACK (set_click_mode_from_settings), self,
+                              G_CONNECT_SWAPPED);
+     set_click_mode_from_settings (self);
++
++#ifdef __APPLE__
++    /* Slow-click rename: any keypress or scroll cancels the pending
++     * trigger. */
++    controller = gtk_event_controller_key_new ();
++    gtk_event_controller_set_propagation_phase (controller, GTK_PHASE_CAPTURE);
++    g_signal_connect (controller, "key-pressed",
++                      G_CALLBACK (slow_rename_on_key_pressed), self);
++    gtk_widget_add_controller (GTK_WIDGET (self), controller);
++
++    g_signal_connect_object (gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (priv->scrolled_window)),
++                             "value-changed",
++                             G_CALLBACK (slow_rename_cancel), self,
++                             G_CONNECT_SWAPPED);
++    g_signal_connect_object (gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (priv->scrolled_window)),
++                             "value-changed",
++                             G_CALLBACK (slow_rename_cancel), self,
++                             G_CONNECT_SWAPPED);
++#endif
+ }
+ 
+ NautilusFile *
 diff --git a/src/nautilus-list-view.c b/src/nautilus-list-view.c
 index 4f5094b..edbd1af 100644
 --- a/src/nautilus-list-view.c
@@ -11680,6 +12144,49 @@ index 299e3a8..38b4485 100644
 +
  guint nautilus_metadata_get_id (const char *metadata);
 +gboolean nautilus_metadata_key_is_list (const char *key);
+diff --git a/src/nautilus-name-cell.c b/src/nautilus-name-cell.c
+index 8e01f47..b98e199 100644
+--- a/src/nautilus-name-cell.c
++++ b/src/nautilus-name-cell.c
+@@ -14,6 +14,10 @@
+ #include "nautilus-ui-utilities.h"
+ #include "nautilus-view-item.h"
+ 
++#ifdef __APPLE__
++#include "nautilus-list-base-private.h"
++#endif
++
+ #define SPINNER_DELAY_MS 200
+ 
+ struct _NautilusNameCell
+@@ -32,6 +36,7 @@ struct _NautilusNameCell
+     GtkWidget *spinner;
+     GtkWidget *icon;
+     GtkWidget *emblems_box;
++    GtkWidget *label;
+     GtkWidget *snippet_button;
+     GtkLabel *snippet;
+     GtkWidget *path;
+@@ -367,6 +372,11 @@ nautilus_name_cell_init (NautilusNameCell *self)
+     g_object_bind_property (self, "item",
+                             self->item_signal_group, "target",
+                             G_BINDING_SYNC_CREATE);
++
++#ifdef __APPLE__
++    /* macOS port: Finder-style slow second click on the name renames. */
++    setup_cell_slow_click_rename (NAUTILUS_VIEW_CELL (self), self->label);
++#endif
+ }
+ 
+ static void
+@@ -476,6 +486,7 @@ nautilus_name_cell_class_init (NautilusNameCellClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, spinner);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, icon);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, emblems_box);
++    gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, label);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, snippet_button);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, snippet);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, path);
 diff --git a/src/nautilus-preferences-dialog.c b/src/nautilus-preferences-dialog.c
 index de009fa..05474bc 100644
 --- a/src/nautilus-preferences-dialog.c

@@ -1,6 +1,6 @@
 # Shenzhen Files (Nautilus → macOS) — Integrated Build Status
 
-**Date:** 2026-07-19 · **Version:** 26.7.19 build 1 (upstream 51.beta) · arm64,
+**Date:** 2026-07-22 · **Version:** 26.7.19 build 1 (upstream 51.beta) · arm64,
 `debugoptimized`, `-Dmacos_port=true` · Homebrew GTK 4.22.4 / GLib 2.88.2.
 
 Single integrated tree at `nautilus/` (uncommitted working-tree patches).
@@ -512,6 +512,64 @@ area). Changes:
 
 ---
 
+## Finder-style slow second click renames (2026-07-22)
+
+User request: "Add the second slow click to rename files like in the Finder."
+Click a file once to select it; a second, separate primary click on the
+file's NAME LABEL (not the icon) that lands after the double-click interval
+opens the inline rename popover — exactly Finder's rename gesture. A fast
+second click is still a double-click (opens). Darwin-gated throughout.
+
+- **Hook points:** the cells attach a non-claiming `GtkGestureClick`
+  (primary button, bubble phase) to their name label —
+  `setup_cell_slow_click_rename()` in `nautilus-list-base.c`, called from
+  `nautilus_name_cell_init` (list view; `label` template child newly bound)
+  and `nautilus_grid_cell_init` (grid view). All state + logic live in
+  `NautilusListBase` (private struct), so both views share one
+  implementation and at most one pending trigger exists per view.
+- **Arming rules:** press must be a single (n_press==1) unmodified primary
+  click on the name label of an item that was ALREADY the single selected
+  item BEFORE the press (checked at press time, before GtkListBase mutates
+  selection — so the click that selects never arms, and multi-selection
+  never arms); a clean release then re-verifies the selection and arms a
+  one-shot timeout. The timeout re-verifies (same model, item still the
+  single selection) and activates the existing `view.rename` GAction — the
+  same action as F2, so popover, validation, and batch/single dispatch are
+  identical.
+- **Cancel rules:** the pending trigger is cancelled by any further press
+  anywhere in the view (item or background — a double-click's second press
+  lands here, so double-click always wins), any keypress (capture-phase key
+  controller), any selection change (model `selection-changed`), any scroll
+  (h/v adjustment `value-changed`), navigation (`setup_directory`), and
+  view dispose. A drag never arms: the click gesture is cancelled before
+  release, and the press-time candidate flag is dropped in `stopped`.
+  Right/middle clicks never reach the gesture (primary-only); Ctrl/Shift/
+  Alt/Cmd-modified clicks are disqualified at press; single-click-to-open
+  mode disables the whole feature.
+- **Timing source:** the system double-click interval — the
+  `com.apple.mouse.doubleClickThreshold` preference backing NSEvent's
+  `doubleClickInterval` (0.5 s AppKit fallback, clamped 0.15–2 s), read via
+  CFPreferences. GDK's macOS backend does NOT map it into
+  `gtk-double-click-time` (checked GTK 4.22.4: no `doubleClickInterval`
+  anywhere), so on first use it is synced INTO `GtkSettings
+  gtk-double-click-time` — GTK's own double-click (open) detection and the
+  rename delay now share one clock that matches the user's system setting.
+  Rename fires at gtk-double-click-time + 100 ms margin after the release.
+- **Verified (scripted GUI session, `scratch-rename/verify-slowrename.sh`,
+  15/15 checks):** window located via CGWindowList, name labels located by
+  OCR of a window screenshot (GTK's macOS AX tree exposes only the window,
+  not the labels), guarded window-server clicks, assertions on the
+  `slow-rename:` g_debug lines and on-disk results. List view: selecting
+  click doesn't arm; slow second click armed (delay 600 ms = synced 500 ms
+  + margin) and fired; typed replacement committed → `zzz.txt` (base name
+  was preselected, extension kept). Double-click on a selected folder:
+  pending trigger cancelled by the second press, folder opened, no rename.
+  Grid view: same arm/fire pass on `inner-file.txt`, Esc closes popover
+  without renaming, second pass commits `yyy.txt`; click on the ICON of the
+  selected grid item does not arm. Session quit via Cmd-Q, `pgrep` clean.
+
+---
+
 ## What's degraded / limitations
 
 - **Trash browsing:** the sidebar Trash item opens Finder's Trash (no
@@ -570,6 +628,11 @@ install. Run the **bundle** (`dist/Nautilus.app`) where noted.
 - [ ] Space-bar QuickLook toggles the panel; arrow keys page selection.
 - [ ] Get Info / Properties dialog populates.
 - [ ] Star / unstar a file, restart, confirm the star persists (tag DB).
+- [ ] **Slow-click rename feel** (2026-07-22): select a file, then click its
+      name once — after ~0.6 s the rename popover opens with the base name
+      preselected; a normal double-click must still open. Try list + grid,
+      and check a click-then-drag does NOT pop the rename afterward.
+      (All script-verified; this item is about the interaction feel.)
 
 ### C. Finder drag & drop (W5 — real-drag checklist)
 
