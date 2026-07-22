@@ -1,6 +1,6 @@
 # Shenzhen Files (Nautilus → macOS) — Integrated Build Status
 
-**Date:** 2026-07-22 · **Version:** 26.7.19 build 1 (upstream 51.beta) · arm64,
+**Date:** 2026-07-22 · **Version:** 26.7.22 build 1 (upstream 51.beta) · arm64,
 `debugoptimized`, `-Dmacos_port=true` · Homebrew GTK 4.22.4 / GLib 2.88.2.
 
 Single integrated tree at `nautilus/` (uncommitted working-tree patches).
@@ -938,6 +938,20 @@ launch smoke test on the quarantined copy so this class of bug can't ship
 again. Re-notarized (submission `b666c1f7-…`, Accepted) and re-released; the
 quarantined download launches cleanly and the tag DB initializes. See
 docs/phase6-known-issues.md §7.
+
+## Release 26.7.22-1 (2026-07-22)
+
+Second public release. Accumulated since 26.7.19-1 (whose asset had been
+clobbered in place during the signing/crash iterations): Developer ID +
+notarization (Gatekeeper-clean downloads), the hardened-runtime tinysparql
+startup-crash fix with graceful starring degradation, the paste crash fix
+(GDK-macOS NULL-provider clipboard clear) + Finder-paste URI-repair ordering
+fix, and Finder-style slow-click rename. Version bumped in
+package/make-app.sh (SHORT_VERSION), package/Info.plist.template, README
+badge; the self-updater reads CFBundleShortVersionString/CFBundleVersion from
+the bundle, so the built app self-reports 26.7.22-1 (post-update handshake
+compares the tag's YY.M.DD against exactly that). 26.7.19-1 stays intact as a
+historical release; releases/latest now serves 26.7.22-1.
 
 ## Paste crash fixed: clipboard clear on cut-paste (2026-07-22)
 
