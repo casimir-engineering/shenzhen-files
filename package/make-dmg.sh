@@ -104,6 +104,17 @@ if [[ -z "$device" || -z "$mount_point" ]]; then
 fi
 echo "mounted $device at $mount_point"
 
+# Finder registers new volumes asynchronously; scripting it before the disk
+# appears fails with -1728 ("Can't get disk"). Poll until Finder sees it.
+for _ in $(seq 1 20); do
+  if osascript -e "tell application \"Finder\" to get disk \"$vol_name\"" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+osascript -e "tell application \"Finder\" to get disk \"$vol_name\"" >/dev/null 2>&1 \
+  || { echo "error: Finder never registered volume '$vol_name'" >&2; exit 1; }
+
 osascript <<EOF
 tell application "Finder"
     tell disk "$vol_name"
