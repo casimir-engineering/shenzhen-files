@@ -38,7 +38,7 @@ APP="${1:-$repo_root/dist/Shenzhen Files.app}"
 # YY.M.DD with CFBundleVersion as the same-day build number — together they
 # form the release tag YY.M.DD-BUILD the self-updater compares against.
 BUNDLE_ID="com.intuition.shenzhenfiles"
-SHORT_VERSION="26.7.19"
+SHORT_VERSION="26.7.22"
 BUNDLE_VERSION="1"
 
 # Locales kept in the bundle (nautilus ships ~120; trim to a reasonable set).
