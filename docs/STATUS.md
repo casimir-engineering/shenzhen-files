@@ -875,3 +875,25 @@ launch smoke test on the quarantined copy so this class of bug can't ship
 again. Re-notarized (submission `b666c1f7-…`, Accepted) and re-released; the
 quarantined download launches cleanly and the tag DB initializes. See
 docs/phase6-known-issues.md §7.
+
+## Paste crash fixed: clipboard clear on cut-paste (2026-07-22)
+
+User crash on the installed app: cut/copy a file, paste it back into the
+same folder → SIGSEGV in `-[GdkMacosPasteboardItemDataProvider types]`.
+Root cause is an upstream GDK-macOS bug: `gdk_clipboard_set_content
+(clipboard, NULL)` — the documented "release the clipboard claim" call —
+reaches the macOS backend's claim path with a nil content provider, and
+`types` dereferences it (gtk 4.22.4, `gdk/macos/gdkmacospasteboard.c:324`;
+worsened by `gdk_content_formats_get_mime_types` leaving its out-param
+uninitialized on the precondition failure, so stack garbage becomes the
+loop count). Nautilus clears the clipboard this way in two places: the
+colliding-URIs check when pasting into the source folder, and after every
+cut-paste. Fix: `nautilus_clipboard_clear()` (darwin-gated) claims with an
+empty union provider instead of NULL — same clear semantics, valid
+provider, pasteboard verified empty afterwards. While regression-testing,
+paste-from-Finder was found broken unless a drag had already happened
+(URI-repair deserializer registered too late) — `paste_files()` now
+registers it up front. Scripted lldb repro before/after + regression
+matrix (copy/cut/collision/Finder paste) in
+`docs/phase6-known-issues.md` §8. Upstream-reportable GDK bug documented
+there. Release re-signed/notarized and 26.7.19-1 asset re-published.

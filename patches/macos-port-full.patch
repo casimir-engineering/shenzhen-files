@@ -1664,6 +1664,70 @@ index 397cbf3..a466982 100644
      return ret;
 +#endif
  }
+diff --git a/src/nautilus-clipboard.c b/src/nautilus-clipboard.c
+index f8a1358..bd932b3 100644
+--- a/src/nautilus-clipboard.c
++++ b/src/nautilus-clipboard.c
+@@ -112,6 +112,38 @@ nautilus_clipboard_from_string (char    *string,
+     return clip;
+ }
+ 
++/**
++ * nautilus_clipboard_clear:
++ * @clipboard: the clipboard to release our claim on
++ *
++ * Portable replacement for gdk_clipboard_set_content (clipboard, NULL).
++ *
++ * On macOS, GDK's quartz backend crashes on a NULL content provider:
++ * _gdk_macos_clipboard_claim() unconditionally forwards the provider to
++ * -[GdkMacosPasteboardItem initForClipboard:withContentProvider:], and
++ * -[GdkMacosPasteboardItemDataProvider types] then calls
++ * gdk_content_provider_ref_storable_formats() on the nil provider. That
++ * fails its precondition and returns NULL, the follow-up
++ * gdk_content_formats_get_mime_types (NULL, &n_mime_types) early-returns
++ * WITHOUT initializing the out-param, and the loop then indexes the NULL
++ * mime_types array with stack garbage as the count -> SIGSEGV
++ * (gtk 4.22.4, gdk/macos/gdkmacospasteboard.c:317-341; upstream GDK bug).
++ * Setting an empty union provider takes the same claim path with a valid
++ * (empty-formats) provider, which both clears the pasteboard and avoids
++ * the crash.
++ */
++void
++nautilus_clipboard_clear (GdkClipboard *clipboard)
++{
++#ifdef __APPLE__
++    g_autoptr (GdkContentProvider) empty = gdk_content_provider_new_union (NULL, 0);
++
++    gdk_clipboard_set_content (clipboard, empty);
++#else
++    gdk_clipboard_set_content (clipboard, NULL);
++#endif
++}
++
+ void
+ nautilus_clipboard_clear_if_colliding_uris (GtkWidget   *widget,
+                                             const GList *item_uris)
+@@ -141,7 +173,7 @@ nautilus_clipboard_clear_if_colliding_uris (GtkWidget   *widget,
+         if (g_list_find_custom ((GList *) clipboard_item_uris, l->data,
+                                 (GCompareFunc) g_strcmp0))
+         {
+-            gdk_clipboard_set_content (clipboard, NULL);
++            nautilus_clipboard_clear (clipboard);
+             break;
+         }
+     }
+diff --git a/src/nautilus-clipboard.h b/src/nautilus-clipboard.h
+index bc71305..8d34a67 100644
+--- a/src/nautilus-clipboard.h
++++ b/src/nautilus-clipboard.h
+@@ -30,6 +30,7 @@ GType              nautilus_clipboard_get_type     (void);
+ 
+ void nautilus_clipboard_clear_if_colliding_uris    (GtkWidget          *widget,
+                                                     const GList        *item_uris);
++void nautilus_clipboard_clear                      (GdkClipboard       *clipboard);
+ GList             *nautilus_clipboard_peek_files   (NautilusClipboard *clip);
+ GList             *nautilus_clipboard_get_uri_list (NautilusClipboard *clip);
+ gboolean           nautilus_clipboard_is_cut       (NautilusClipboard *clip);
 diff --git a/src/nautilus-column-utilities.c b/src/nautilus-column-utilities.c
 index 3d95cf4..ca56749 100644
 --- a/src/nautilus-column-utilities.c
@@ -2588,7 +2652,7 @@ index 0d6200f..f643c34 100644
   * parse_previous_name:
   * @name: Name of the original file
 diff --git a/src/nautilus-files-view.c b/src/nautilus-files-view.c
-index dc65361..0708f31 100644
+index dc65361..da2f178 100644
 --- a/src/nautilus-files-view.c
 +++ b/src/nautilus-files-view.c
 @@ -32,8 +32,10 @@
@@ -2798,21 +2862,47 @@ index dc65361..0708f31 100644
  static void
  trash_or_delete_done_cb (GHashTable        *debuting_uris,
                           gboolean           user_cancel,
-@@ -2821,6 +2979,24 @@ paste_files (NautilusFilesView *view,
+@@ -2700,8 +2858,7 @@ handle_clipboard_data (NautilusFilesView *view,
+         /* If items are cut then remove from clipboard */
+         if (action == GDK_ACTION_MOVE)
+         {
+-            gdk_clipboard_set_content (gtk_widget_get_clipboard (GTK_WIDGET (view)),
+-                                       NULL);
++            nautilus_clipboard_clear (gtk_widget_get_clipboard (GTK_WIDGET (view)));
+         }
+     }
+ }
+@@ -2779,6 +2936,16 @@ paste_files (NautilusFilesView *view,
+     clipboard = gtk_widget_get_clipboard (GTK_WIDGET (view));
+     formats = gdk_clipboard_get_formats (clipboard);
+ 
++#ifdef __APPLE__
++    /* Register the macOS URI-repair (de)serializers BEFORE any clipboard
++     * read. Remote (e.g. Finder) pasteboard content advertises the
++     * deserializable GTypes too (GdkFileList/GFile), so the branches below
++     * can hit GTK's stock text/uri-list deserializer, which mangles GDK-
++     * macOS' percent-encoded uri-list ("file%3A//...") into parentless
++     * GFiles and the paste fails. Idempotent (g_once). */
++    nautilus_dnd_init_macos ();
++#endif
++
+     view->selection_source = NAUTILUS_SELECTION_SOURCE_OP_START;
+     real_dest_uri = dest_uri != NULL ? dest_uri : nautilus_files_view_get_backing_uri (view);
+ 
+@@ -2821,6 +2988,23 @@ paste_files (NautilusFilesView *view,
                                          paste_value_received_callback,
                                          g_steal_pointer (&data));
      }
 +#ifdef __APPLE__
 +    else if (gdk_content_formats_contain_mime_type (formats, "text/uri-list"))
 +    {
-+        /* External pasteboard content (e.g. files copied in Finder) is
-+         * exposed by GDK-macOS as mime types only — GTypes are present only
-+         * while the content is app-local. Reading GDK_TYPE_FILE_LIST goes
-+         * through the text/uri-list deserializer (with the macOS URI repair
-+         * registered in nautilus-dnd.c), yielding usable GFiles. Idempotent;
-+         * ensures the repair is in place even if no drag happened yet. */
-+        nautilus_dnd_init_macos ();
-+
++        /* Fallback for external pasteboard content whose formats advertise
++         * text/uri-list but no deserializable GTypes. In practice remote
++         * file content advertises GdkFileList/GFile too (deserializer
++         * GTypes are unioned into remote formats), so the branch above
++         * handles Finder pastes; both go through the text/uri-list
++         * deserializer with the macOS URI repair registered at the top of
++         * paste_files(). */
 +        gdk_clipboard_read_value_async (clipboard, GDK_TYPE_FILE_LIST,
 +                                        G_PRIORITY_DEFAULT,
 +                                        view->clipboard_cancellable,
@@ -2823,7 +2913,7 @@ index dc65361..0708f31 100644
  }
  
  static void
-@@ -6270,6 +6446,23 @@ action_compress (GSimpleAction *action,
+@@ -6270,6 +6454,23 @@ action_compress (GSimpleAction *action,
      nautilus_files_view_compress_dialog_new (view);
  }
  
@@ -2847,7 +2937,7 @@ index dc65361..0708f31 100644
  static void
  send_email_done (GObject      *source_object,
                   GAsyncResult *res,
-@@ -6314,6 +6507,7 @@ real_send_email (GStrv              attachments,
+@@ -6314,6 +6515,7 @@ real_send_email (GStrv              attachments,
                                NULL, NULL, NULL, NULL, (const char * const *) attachments,
                                XDP_EMAIL_FLAG_NONE, NULL, send_email_done, toplevel);
  }
@@ -2855,7 +2945,7 @@ index dc65361..0708f31 100644
  
  static void
  email_archive_ready (GFile    *new_file,
-@@ -6453,6 +6647,13 @@ can_set_wallpaper (NautilusFileList *selection)
+@@ -6453,6 +6655,13 @@ can_set_wallpaper (NautilusFileList *selection)
  {
      NautilusFile *file;
  
@@ -2869,7 +2959,7 @@ index dc65361..0708f31 100644
      if (!list_len_is_one (selection))
      {
          return FALSE;
-@@ -6469,6 +6670,7 @@ can_set_wallpaper (NautilusFileList *selection)
+@@ -6469,6 +6678,7 @@ can_set_wallpaper (NautilusFileList *selection)
      return TRUE;
  }
  
@@ -2877,7 +2967,7 @@ index dc65361..0708f31 100644
  static void
  set_wallpaper_with_portal_cb (GObject      *source,
                                GAsyncResult *result,
-@@ -6515,12 +6717,14 @@ set_wallpaper_with_portal (NautilusFile *file,
+@@ -6515,12 +6725,14 @@ set_wallpaper_with_portal (NautilusFile *file,
                                NULL);
      xdp_parent_free (parent);
  }
@@ -2892,7 +2982,7 @@ index dc65361..0708f31 100644
      g_autolist (NautilusFile) selection = NULL;
  
      g_assert (NAUTILUS_IS_FILES_VIEW (user_data));
-@@ -6534,6 +6738,7 @@ action_set_as_wallpaper (GSimpleAction *action,
+@@ -6534,6 +6746,7 @@ action_set_as_wallpaper (GSimpleAction *action,
  
          set_wallpaper_with_portal (file, user_data);
      }
@@ -2900,7 +2990,7 @@ index dc65361..0708f31 100644
  }
  
  static void
-@@ -6879,6 +7084,18 @@ const GActionEntry view_entries[] =
+@@ -6879,6 +7092,18 @@ const GActionEntry view_entries[] =
          .activate = action_open_current_directory_with_other_application
      },
      { .name = "open-current-directory-with-files", .activate = action_open_current_directory_with_files },
@@ -2919,7 +3009,7 @@ index dc65361..0708f31 100644
      { .name = "open-item-new-window", .activate = action_open_item_new_window },
      { .name = "open-item-new-tab", .activate = action_open_item_new_tab },
      { .name = "cut", .activate = action_cut},
-@@ -7538,6 +7755,91 @@ nautilus_files_view_update_actions_state (NautilusFilesView *self)
+@@ -7538,6 +7763,91 @@ nautilus_files_view_update_actions_state (NautilusFilesView *self)
      action = g_action_map_lookup_action (G_ACTION_MAP (view_action_group),
                                           "preview-selection");
      g_simple_action_set_enabled (G_SIMPLE_ACTION (action), selection != NULL);
@@ -3011,7 +3101,7 @@ index dc65361..0708f31 100644
      action = g_action_map_lookup_action (G_ACTION_MAP (view_action_group),
                                           "copy-current-location");
      g_simple_action_set_enabled (G_SIMPLE_ACTION (action),
-@@ -7932,6 +8234,24 @@ update_selection_menu (NautilusFilesView *self,
+@@ -7932,6 +8242,24 @@ update_selection_menu (NautilusFilesView *self,
          }
  
          g_free (item_label);
@@ -3036,7 +3126,7 @@ index dc65361..0708f31 100644
      }
  
      /* The "Open" submenu should be hidden if the item doesn't open in the view. */
-@@ -8072,6 +8392,55 @@ update_selection_menu (NautilusFilesView *self,
+@@ -8072,6 +8400,55 @@ update_selection_menu (NautilusFilesView *self,
                                           "hidden-when",
                                           !show_scripts ? "action-missing" : NULL);
  
@@ -3092,7 +3182,7 @@ index dc65361..0708f31 100644
      const char *view_name = NAUTILUS_IS_NETWORK_VIEW (self->list_base) ? "network" : "normal";
  
      /* Filter  the menus at the end to not interfere with other checks */
-@@ -8121,6 +8490,87 @@ update_background_menu (NautilusFilesView *self,
+@@ -8121,6 +8498,87 @@ update_background_menu (NautilusFilesView *self,
                                           "hidden-when",
                                           remove_submenu ? "action-missing" : NULL);
  
