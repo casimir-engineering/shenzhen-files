@@ -200,3 +200,86 @@ Binary: `build/src/nautilus` (arm64, `debugoptimized`, `-Dmacos_port=true`).
 - **Upstreamable:** the packaging fix is port-specific. The
   `ensure_init_parser` hard-abort is arguably a tinysparql robustness bug
   (a missing optional module should not abort the host app).
+
+## 8. Paste crash: cut + paste into the same folder (GDK-macOS NULL-provider clipboard clear) — FIXED (2026-07-22)
+
+- **Severity:** was critical — user-reported crash of the installed
+  `/Applications/Shenzhen Files.app` on Cmd-C/Cmd-V of a file (incident
+  `4FD0229C-6193-4F2D-92A3-4AED17A739F6`, `nautilus-2026-07-22-180556.ips`).
+- **Crash signature:** `EXC_BAD_ACCESS (SIGSEGV) KERN_INVALID_ADDRESS at 0x0`,
+  main thread: `-[GdkMacosPasteboardItemDataProvider types]+84` ←
+  `-[GdkMacosPasteboardItem initForClipboard:withContentProvider:]` ←
+  `_gdk_macos_clipboard_claim` ← `gdk_clipboard_set_content` ←
+  `nautilus_clipboard_clear_if_colliding_uris` ←
+  `nautilus_files_view_move_copy_items` ← `paste_value_received_callback`.
+- **Trigger:** pasting when the clipboard operation is a MOVE and the URIs
+  collide — i.e. **cut a file, then paste into the folder that still
+  contains it** (`clear_if_colliding_uris` matches the clipboard URIs
+  against the paste items and clears the clipboard). The same
+  `gdk_clipboard_set_content (clipboard, NULL)` "clear" also runs after
+  every successful cut-paste (`handle_clipboard_data`, MOVE branch).
+- **Root cause (upstream GDK-macOS bug, gtk 4.22.4):**
+  `gdk_clipboard_set_content (clipboard, NULL)` is the documented way to
+  release a clipboard claim (gdkclipboard.c explicitly allows
+  provider == NULL and claims locally with empty formats). The macOS
+  backend's claim vfunc forwards the provider unconditionally:
+  `_gdk_macos_clipboard_claim()` → `_gdk_macos_clipboard_send_to_pasteboard()`
+  (`gdk/macos/gdkmacosclipboard.c:121-124`) →
+  `-[GdkMacosPasteboardItem initForClipboard:withContentProvider:nil]` →
+  `-[GdkMacosPasteboardItemDataProvider types]`
+  (`gdk/macos/gdkmacospasteboard.c:317-341`), which calls
+  `gdk_content_provider_ref_storable_formats (nil)`. That fails its
+  precondition and returns NULL; the follow-up
+  `gdk_content_formats_get_mime_types (NULL, &n_mime_types)` early-returns
+  **without initializing the out-param**, so the loop indexes the NULL
+  `mime_types` array with stack garbage as the count → NULL read at
+  `types+84` (`ldr x0, [x22, x24, lsl #3]` with x22 = 0, disassembly of the
+  Homebrew arm64 dylib matches the .ips offset exactly). Whether it crashes
+  depends on the stack garbage being nonzero — trivial test programs can
+  survive with four `Gdk-CRITICAL`s, but Nautilus's paste path crashes
+  reliably. Linux backends (X11/Wayland) handle the NULL provider, so
+  upstream Nautilus never sees this.
+- **Repro (dev build, scripted, no GUI interaction):** launch
+  `run-nautilus.sh` on a folder with one file, drive
+  `view.select-all` → `view.cut` → `view.paste` via
+  `gtk_widget_activate_action` from lldb, and (to remove the
+  stack-garbage lottery) force `*n_mime_types = 7` at the
+  `gdk_content_formats_get_mime_types(NULL, …)` early-return. Pre-fix
+  binary: exact user crash (`EXC_BAD_ACCESS address=0x0` at `types+84`,
+  full user stack reproduced). Fixed binary: the conditional breakpoint
+  never fires (formats pointer is never NULL) and the session survives.
+- **Fix (port-side, `src/nautilus-clipboard.c`):** new
+  `nautilus_clipboard_clear()` used by both NULL-clear call sites
+  (`nautilus-clipboard.c` collision path, `nautilus-files-view.c`
+  post-cut-paste path). On darwin it claims the clipboard with an **empty
+  union content provider** (`gdk_content_provider_new_union (NULL, 0)`)
+  instead of NULL — same claim path, valid provider with empty formats, so
+  the pasteboard is still cleared (verified: `pbpaste` empty, no warnings);
+  elsewhere it keeps the standard NULL clear.
+- **Also fixed while regression-testing:** paste-from-Finder ran GTK's
+  stock `text/uri-list` deserializer if no in-app drag had happened yet
+  (the URI-repair override was only registered in the darwin-only
+  uri-list fallback branch, but remote file content also advertises the
+  `GdkFileList`/`GFile` gtypes, so the fallback rarely ran).
+  `paste_files()` now registers `nautilus_dnd_init_macos()` up front;
+  without it a Finder paste produced parentless `file%3A///…` GFiles and
+  died with a `g_object_ref` critical in the undo bookkeeping
+  (`nautilus_file_undo_info_ext_new`, src_dir NULL) without copying
+  anything.
+- **Regression-checked (fixed build, scripted via lldb-driven GActions):**
+  copy→paste into another folder (file copied, original kept);
+  cut→paste into another folder (file moved, clipboard cleared silently);
+  cut→paste into the SAME folder (the crash path — survives, file intact,
+  clipboard cleared); paste of a Finder-style `public.file-url`+
+  `NSFilenamesPboardType` pasteboard written by an external process (file
+  copied, no criticals; one flaky no-op observed twice during bring-up
+  before the deserializer-registration fix, 4/4 clean after).
+- **Upstreamable:** yes, GDK bug — `_gdk_macos_clipboard_claim` must
+  tolerate a NULL provider (skip `send_to_pasteboard` and just
+  `clearContents`, matching the "release our claim" semantics), and/or
+  `-[GdkMacosPasteboardItemDataProvider types]` must guard a nil
+  `_contentProvider`. Exact lines: `gdk/macos/gdkmacosclipboard.c:123`
+  (unconditional `send_to_pasteboard (self, provider)` for local claims)
+  and `gdk/macos/gdkmacospasteboard.c:324-326` (nil-provider deref in
+  `types`). The Nautilus-side workaround (empty provider instead of NULL)
+  is harmless everywhere and could also be upstreamed as a hardening.
