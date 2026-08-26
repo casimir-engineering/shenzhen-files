@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # make-icon.sh — generate package/AppIcon.icns (and package/dmg-logo.png) from
-# the Shenzhen Files logo mark rendered by make-logo.swift.
+# the Shenzhen Files folder-first mark rendered by make-logo.swift.
 #
-# The mark follows shenzhen-pdf's icon composition ("深圳" over a product
-# subtitle, transparent background); each iconset size is rendered natively
-# by the Swift script (text scales cleanly, no raster upscaling).
+# The folder remains visually dominant while the small 深圳 signature preserves
+# the product family identity. Each iconset size is rendered natively by the
+# Swift script (clean geometry and no raster upscaling).
 #
 # Usage:
 #   ./make-icon.sh
