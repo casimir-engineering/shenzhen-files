@@ -427,7 +427,7 @@ index 0abe9f1..f037c91 100644
  
  static void
 diff --git a/src/nautilus-application.c b/src/nautilus-application.c
-index 397cbf3..a466982 100644
+index 397cbf3..90e46d0 100644
 --- a/src/nautilus-application.c
 +++ b/src/nautilus-application.c
 @@ -35,9 +35,12 @@
@@ -782,7 +782,7 @@ index 397cbf3..a466982 100644
          g_ptr_array_add (file_array, file);
      }
      else
-@@ -994,11 +1221,620 @@ nautilus_application_identify_to_portal (GApplication *app)
+@@ -994,11 +1221,624 @@ nautilus_application_identify_to_portal (GApplication *app)
                              NULL, NULL, NULL);
  }
  
@@ -912,6 +912,9 @@ index 397cbf3..a466982 100644
 +    macos_menu_append (clipboard_section, _("Select All"), "view.select-all", NULL);
 +
 +    macos_menu_append (trash_section, _("Move to Trash"), "view.move-to-trash", "<Meta>BackSpace");
++    macos_menu_append (trash_section, _("Delete Permanently…"),
++                       "view.delete-permanently-shortcut",
++                       "<Meta><Shift>BackSpace");
 +
 +    g_menu_append_section (menu, NULL, G_MENU_MODEL (undo_section));
 +    g_menu_append_section (menu, NULL, G_MENU_MODEL (clipboard_section));
@@ -1241,6 +1244,7 @@ index 397cbf3..a466982 100644
 +        { "<Meta>Down", "view.open-with-default-application" },
 +        /* Backups/aliases for combos also present as menu key equivalents */
 +        { "<Meta>BackSpace", "view.move-to-trash" },
++        { "<Meta><Shift>BackSpace", "view.delete-permanently-shortcut" },
 +        { "<Meta>plus|<Meta>KP_Add", "view.zoom-in" },
 +        { "<Meta>KP_Subtract", "view.zoom-out" },
 +        { "<Meta>KP_0", "view.zoom-standard" },
@@ -1403,7 +1407,7 @@ index 397cbf3..a466982 100644
      g_application_set_resource_base_path (G_APPLICATION (self), "/org/gnome/nautilus");
  
      /* Register the app with the host app registry in XDG Desktop Portal before
-@@ -1011,6 +1847,7 @@ nautilus_application_startup (GApplication *app)
+@@ -1011,6 +1851,7 @@ nautilus_application_startup (GApplication *app)
          nautilus_application_identify_to_portal (app);
      }
  
@@ -1411,7 +1415,7 @@ index 397cbf3..a466982 100644
      /* Initialize GDK display (for wayland-x11-interop protocol) before GTK does
       * it during the chain-up. */
      g_autoptr (GError) error = NULL;
-@@ -1027,6 +1864,7 @@ nautilus_application_startup (GApplication *app)
+@@ -1027,6 +1868,7 @@ nautilus_application_startup (GApplication *app)
          g_message ("Failed to initialize display server connection: %s",
                     error->message);
      }
@@ -1419,7 +1423,7 @@ index 397cbf3..a466982 100644
  
      /* Chain up to the GtkApplication implementation early, so that gtk_init()
       * is called for us.
-@@ -1057,6 +1895,65 @@ nautilus_application_startup (GApplication *app)
+@@ -1057,6 +1899,65 @@ nautilus_application_startup (GApplication *app)
  
      nautilus_init_application_actions (self);
  
@@ -1485,7 +1489,7 @@ index 397cbf3..a466982 100644
      if (!g_test_initialized ())
      {
          maybe_migrate_gtk_filechooser_preferences ();
-@@ -1090,11 +1987,13 @@ nautilus_application_dbus_register (GApplication     *app,
+@@ -1090,11 +1991,13 @@ nautilus_application_dbus_register (GApplication     *app,
          return FALSE;
      }
  
@@ -1499,7 +1503,7 @@ index 397cbf3..a466982 100644
  
      self->search_provider = nautilus_shell_search_provider_new ();
      if (!nautilus_shell_search_provider_register (self->search_provider, connection, error))
-@@ -1126,11 +2025,13 @@ nautilus_application_dbus_unregister (GApplication    *app,
+@@ -1126,11 +2029,13 @@ nautilus_application_dbus_unregister (GApplication    *app,
          g_clear_object (&self->fdb_manager);
      }
  
@@ -1513,7 +1517,7 @@ index 397cbf3..a466982 100644
  
      if (self->search_provider)
      {
-@@ -1146,6 +2047,14 @@ update_dbus_opened_locations (NautilusApplication *self)
+@@ -1146,6 +2051,14 @@ update_dbus_opened_locations (NautilusApplication *self)
  {
      self->dbus_location_update_timeout_id = 0;
  
@@ -1528,7 +1532,7 @@ index 397cbf3..a466982 100644
      g_autoptr (GHashTable) hashed_locations = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                                       g_free, NULL);
      const gchar *dbus_object_path = g_application_get_dbus_object_path (G_APPLICATION (self));
-@@ -1207,6 +2116,95 @@ schedule_dbus_location_update (NautilusApplication *self)
+@@ -1207,6 +2120,95 @@ schedule_dbus_location_update (NautilusApplication *self)
      }
  }
  
@@ -1624,7 +1628,7 @@ index 397cbf3..a466982 100644
  static void
  nautilus_application_window_added (GtkApplication *app,
                                     GtkWindow      *window)
-@@ -1217,11 +2215,22 @@ nautilus_application_window_added (GtkApplication *app,
+@@ -1217,11 +2219,22 @@ nautilus_application_window_added (GtkApplication *app,
  
      GTK_APPLICATION_CLASS (nautilus_application_parent_class)->window_added (app, window);
  
@@ -1647,7 +1651,7 @@ index 397cbf3..a466982 100644
      }
  }
  
-@@ -1317,6 +2326,10 @@ nautilus_application_search (NautilusApplication *self,
+@@ -1317,6 +2330,10 @@ nautilus_application_search (NautilusApplication *self,
  gboolean
  nautilus_application_is_sandboxed (void)
  {
@@ -1658,7 +1662,7 @@ index 397cbf3..a466982 100644
      static gboolean ret;
  
      static gsize init = 0;
-@@ -1328,4 +2341,5 @@ nautilus_application_is_sandboxed (void)
+@@ -1328,4 +2345,5 @@ nautilus_application_is_sandboxed (void)
      }
  
      return ret;
@@ -14982,7 +14986,7 @@ index c336138..d0e8d5e 100644
          };
        };
 diff --git a/src/resources/ui/shortcuts-dialog.blp b/src/resources/ui/shortcuts-dialog.blp
-index e439d3c..abc4720 100644
+index e439d3c..b20c105 100644
 --- a/src/resources/ui/shortcuts-dialog.blp
 +++ b/src/resources/ui/shortcuts-dialog.blp
 @@ -7,7 +7,7 @@ Adw.ShortcutsDialog shortcuts_dialog {
@@ -15055,6 +15059,11 @@ index e439d3c..abc4720 100644
      }
  
      Adw.ShortcutsItem {
+@@ -99,3 +99,3 @@ Adw.ShortcutsDialog shortcuts_dialog {
+       title: C_("shortcuts dialog", "Delete Permanently");
+-      accelerator: "<shift>Delete";
++      accelerator: "<Meta><Shift>BackSpace <shift>Delete";
+     }
 @@ -116,14 +116,14 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
