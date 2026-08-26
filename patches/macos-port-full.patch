@@ -2300,10 +2300,30 @@ index 4ccefc1..b41f4d1 100644
 +void               nautilus_dnd_init_macos                       (void);
 +#endif
 diff --git a/src/nautilus-file-operations.c b/src/nautilus-file-operations.c
-index 005815e..48eb77a 100644
+index 005815e..55dccb1 100644
 --- a/src/nautilus-file-operations.c
 +++ b/src/nautilus-file-operations.c
-@@ -3135,8 +3135,7 @@ verify_destination (CommonJob   *job,
+@@ -65,1 +65,5 @@
++#ifdef __APPLE__
++#include "nautilus-macos-bridge.h"
++#endif
++
+ #ifdef GDK_WINDOWING_X11
+@@ -1648,2 +1652,13 @@ trash_file (CommonJob     *job,
++#ifdef __APPLE__
++    /* GIO's Unix trash backend is not the Trash Finder displays on every
++     * macOS installation. Use the native API for local files so both this
++     * operation and the sidebar's Finder Trash window refer to the same
++     * system-managed location. Keep GIO for non-native locations. */
++    if ((g_file_is_native (file) &&
++         nautilus_macos_trash_file (file, job->cancellable, &error)) ||
++        (!g_file_is_native (file) &&
++         g_file_trash (file, job->cancellable, &error)))
++#else
+     if (g_file_trash (file, job->cancellable, &error))
++#endif
+     {
+@@ -3135,8 +3150,7 @@ verify_destination (CommonJob   *job,
      }
  
      if (!job_aborted (job) &&
@@ -4102,10 +4122,10 @@ index d22b5d9..087fe16 100644
      for (idx = 0; locations[idx] != NULL; idx++)
 diff --git a/src/nautilus-macos-bridge.h b/src/nautilus-macos-bridge.h
 new file mode 100644
-index 0000000..016c951
+index 0000000..c009986
 --- /dev/null
 +++ b/src/nautilus-macos-bridge.h
-@@ -0,0 +1,593 @@
+@@ -0,0 +1,600 @@
 +/*
 + * nautilus-macos-bridge.h: C-callable API of the macOS Objective-C bridge.
 + *
@@ -4203,6 +4223,13 @@ index 0000000..016c951
 +/* Reveal Finder's Trash window (v1 stand-in for browsing trash:///).
 + * Returns TRUE on success. Stub: logs and returns FALSE. */
 +gboolean nautilus_macos_trash_open_in_finder (void);
++
++/* Move a native file into the Trash managed by macOS/Finder. Unlike GIO's
++ * Unix trash implementation, this uses NSFileManager so the item appears in
++ * Finder's Trash (including the appropriate per-volume Trash). */
++gboolean nautilus_macos_trash_file (GFile         *file,
++                                    GCancellable  *cancellable,
++                                    GError       **error);
 +
 +/* --- Open With (nautilus-macos-openwith.m) --- */
 +
@@ -9776,10 +9803,10 @@ index 0000000..faf3a57
 +}
 diff --git a/src/nautilus-macos-trash.m b/src/nautilus-macos-trash.m
 new file mode 100644
-index 0000000..fde4122
+index 0000000..b2479cb
 --- /dev/null
 +++ b/src/nautilus-macos-trash.m
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,169 @@
 +/*
 + * nautilus-macos-trash.m: Finder Trash integration (W2).
 + *
@@ -9798,9 +9825,10 @@ index 0000000..fde4122
 + * You should have received a copy of the GNU General Public
 + * License along with this program; if not, see <http://www.gnu.org/licenses/>.
 + *
-+ * Trashing files works through GIO (g_file_trash). Browsing the trash does
-+ * not (no gvfs trash:/// backend, and ~/.Trash is TCC-protected), so the
-+ * v1 behavior is to hand off to Finder's Trash window from here.
++ * Native files are trashed through NSFileManager so they appear in Finder's
++ * system Trash. Browsing the trash in-app still does not work (no gvfs
++ * trash:/// backend, and ~/.Trash is TCC-protected), so opening Trash is
++ * handed off to Finder.
 + */
 +
 +#define G_LOG_DOMAIN "nautilus-macos-bridge"
@@ -9809,6 +9837,81 @@ index 0000000..fde4122
 +#include "nautilus-macos-bridge.h"
 +
 +#import <AppKit/AppKit.h>
++
++static GIOErrorEnum
++gio_error_from_cocoa_error (NSError *error)
++{
++    if (![[error domain] isEqualToString:NSCocoaErrorDomain])
++    {
++        return G_IO_ERROR_FAILED;
++    }
++
++    switch ([error code])
++    {
++        case NSFileNoSuchFileError:
++        case NSFileReadNoSuchFileError:
++            return G_IO_ERROR_NOT_FOUND;
++
++        case NSFileReadNoPermissionError:
++        case NSFileWriteNoPermissionError:
++            return G_IO_ERROR_PERMISSION_DENIED;
++
++        case NSFileWriteOutOfSpaceError:
++            return G_IO_ERROR_NO_SPACE;
++
++        default:
++            return G_IO_ERROR_FAILED;
++    }
++}
++
++gboolean
++nautilus_macos_trash_file (GFile         *file,
++                           GCancellable  *cancellable,
++                           GError       **error)
++{
++    g_return_val_if_fail (G_IS_FILE (file), FALSE);
++    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
++
++    if (g_cancellable_set_error_if_cancelled (cancellable, error))
++    {
++        return FALSE;
++    }
++
++    g_autofree char *path = g_file_get_path (file);
++
++    if (path == NULL)
++    {
++        g_set_error_literal (error,
++                             G_IO_ERROR,
++                             G_IO_ERROR_NOT_SUPPORTED,
++                             "Only local files can be moved to the macOS Trash");
++        return FALSE;
++    }
++
++    @autoreleasepool
++    {
++        NSString *ns_path = [NSString stringWithUTF8String:path];
++        NSURL *source_url = [NSURL fileURLWithPath:ns_path];
++        NSURL *trashed_url = nil;
++        NSError *ns_error = nil;
++
++        if ([[NSFileManager defaultManager] trashItemAtURL:source_url
++                                          resultingItemURL:&trashed_url
++                                                     error:&ns_error])
++        {
++            g_debug ("nautilus_macos_trash_file: moved %s to %s",
++                     path,
++                     [[[trashed_url path] stringByStandardizingPath] UTF8String]);
++            return TRUE;
++        }
++
++        g_set_error_literal (error,
++                             G_IO_ERROR,
++                             gio_error_from_cocoa_error (ns_error),
++                             [[ns_error localizedDescription] UTF8String]);
++        return FALSE;
++    }
++}
 +
 +/* Ask Finder itself to open its Trash window. Requires the Automation
 + * (Apple Events) TCC permission the first time; returns FALSE if the user
