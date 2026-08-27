@@ -1,6 +1,6 @@
 # Shenzhen Files (Nautilus → macOS) — Integrated Build Status
 
-**Date:** 2026-07-22 · **Version:** 26.7.22 build 1 (upstream 51.beta) · arm64,
+**Date:** 2026-08-27 · **Version:** 26.8.27 build 1 (upstream 51.beta) · arm64,
 `debugoptimized`, `-Dmacos_port=true` · Homebrew GTK 4.22.4 / GLib 2.88.2.
 
 Single integrated tree at `nautilus/` (uncommitted working-tree patches).
