@@ -1,9 +1,8 @@
-// Renders the approved Shenzhen Files macOS app-icon master at any pixel size.
+// Renders the approved Shenzhen Files macOS app-icon foreground at any size.
 //
-// The ImageGen master carries the polished folder artwork. This renderer crops
-// its redundant transparent extraction fringe, then adds a deterministic,
-// antialiased macOS rounded-square mask so the tile fills the icon canvas and
-// every iconset size shares exactly the same bounds.
+// The master contains only the polished folder on transparency. Do not bake a
+// rounded-square plate into these files: current macOS supplies the native app
+// icon enclosure, and embedding another one produces a double-squircle icon.
 //
 //   swift make-logo.swift <out.png> <pixel-size>
 import AppKit
@@ -17,7 +16,7 @@ let outputPath = CommandLine.arguments[1]
 let canvasSize = CGFloat(size)
 let sourceURL = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
-    .appendingPathComponent("AppIcon-source-v3.png")
+    .appendingPathComponent("AppIcon-source-v4.png")
 
 guard let source = NSImage(contentsOf: sourceURL) else {
     FileHandle.standardError.write("failed to load icon master at \(sourceURL.path)\n".data(using: .utf8)!)
@@ -44,21 +43,8 @@ let canvas = NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
 NSColor.clear.setFill()
 canvas.fill()
 
-// The approved master already contains a roughly 5.5% transparent extraction
-// fringe. Crop that fringe instead of adding another inset; macOS applies its
-// own optical sizing in the Dock, so an inset here made the app icon look tiny.
-let sourceInset = min(source.size.width, source.size.height) * 0.055
-let sourceCrop = NSRect(x: sourceInset,
-                        y: sourceInset,
-                        width: source.size.width - (sourceInset * 2),
-                        height: source.size.height - (sourceInset * 2))
-let mask = NSBezierPath(roundedRect: canvas,
-                        xRadius: canvasSize * 0.225,
-                        yRadius: canvasSize * 0.225)
-mask.addClip()
-
 source.draw(in: canvas,
-            from: sourceCrop,
+            from: NSRect(origin: .zero, size: source.size),
             operation: .sourceOver,
             fraction: 1.0,
             respectFlipped: true,
