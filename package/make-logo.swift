@@ -1,8 +1,9 @@
 // Renders the approved Shenzhen Files macOS app-icon artwork at any size.
 //
-// The master fills its square canvas with a white-to-icy-blue gradient but has
-// no pre-rounded corners. Current macOS supplies the final squircle mask; this
-// keeps the artwork large without producing a nested icon enclosure.
+// The master fills its square canvas with a white-to-icy-blue gradient. Dock
+// icons loaded from .icns are not guaranteed to receive a system mask, so the
+// renderer clips the artwork itself to a full-canvas Apple-style rounded
+// square and leaves only the four outer corners transparent.
 //
 //   swift make-logo.swift <out.png> <pixel-size>
 import AppKit
@@ -42,6 +43,14 @@ NSGraphicsContext.current?.shouldAntialias = true
 let canvas = NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
 NSColor.clear.setFill()
 canvas.fill()
+
+// Use the full canvas: this is the app-icon enclosure, not a smaller rounded
+// tile nested inside another system-provided shape. A 22.5% continuous-looking
+// corner radius follows the modern macOS icon silhouette closely.
+let plate = NSBezierPath(roundedRect: canvas,
+                         xRadius: canvasSize * 0.225,
+                         yRadius: canvasSize * 0.225)
+plate.addClip()
 
 source.draw(in: canvas,
             from: NSRect(origin: .zero, size: source.size),

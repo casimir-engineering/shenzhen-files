@@ -4,8 +4,9 @@
 # the Shenzhen Files folder-first mark rendered by make-logo.swift.
 #
 # The folder remains visually dominant while the 深圳 signature stays legible.
-# The source fills the square canvas but has no pre-rounded corners, allowing
-# macOS to apply one native enclosure without shrinking it into a nested icon.
+# The source fills the square canvas; make-logo.swift applies the single
+# full-canvas rounded-square enclosure and transparent outer corners because
+# Dock .icns rendering does not reliably apply a system mask.
 #
 # Usage:
 #   ./make-icon.sh
