@@ -32,7 +32,7 @@
 #     Shenzhen PDF — same Apple ID / team).
 #   * gh authenticated for casimir-engineering.
 #
-# Usage:  ./package/sign-and-notarize.sh [--skip-install]
+# Usage:  ./package/sign-and-notarize.sh [--skip-install] [--prepare-only]
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,11 +46,26 @@ ASSET="ShenzhenFiles-mac-arm64.dmg"
 APP="$repo_root/dist/Shenzhen Files.app"
 DMG="$repo_root/dist/$ASSET"
 
-SKIP_INSTALL=0
-[[ "${1:-}" == "--skip-install" ]] && SKIP_INSTALL=1
-
 log()  { printf '==> %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+SKIP_INSTALL=0
+PREPARE_ONLY=0
+
+for option in "$@"; do
+  case "$option" in
+    --skip-install)
+      SKIP_INSTALL=1
+      ;;
+    --prepare-only)
+      PREPARE_ONLY=1
+      SKIP_INSTALL=1
+      ;;
+    *)
+      fail "Unknown option: $option"
+      ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 # 0. Environment checks (all read-only / prompt-free)
@@ -124,9 +139,13 @@ log "Deep verification passed."
 short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 build_no="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
 TAG="${short_ver}-${build_no}"
-gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 \
-  || fail "Release $TAG does not exist on $REPO — create it first (or fix the version)."
-log "Bundle is $TAG; matching release exists."
+if [[ $PREPARE_ONLY -eq 0 ]]; then
+  gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 \
+    || fail "Release $TAG does not exist on $REPO — create it first (or fix the version)."
+  log "Bundle is $TAG; matching release exists."
+else
+  log "Bundle is $TAG; prepare-only mode does not require a GitHub release yet."
+fi
 
 # ---------------------------------------------------------------------------
 # 3. DMG: build, sign
@@ -192,22 +211,41 @@ before_crashes="$(ls -1 "$crash_dir"/nautilus-*.ips 2>/dev/null | wc -l | tr -d 
 # match the process by bundle name anywhere, and treat a NEW crash report as
 # the authoritative failure signal (a hardened-runtime dlopen rejection SIGABRTs
 # within ~2 s, which is exactly the class of bug this test exists to catch).
+before_smoke_pids="$(
+  { pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus-launcher" || true
+    pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus" || true; } | sort -u
+)"
 DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/szf-smoke-nobus.sock" \
   open -g -n "$qtest_dir/Shenzhen Files.app" 2>/dev/null || true
 sleep 8
-smoke_pids="$(pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus-launcher" || true)"
-smoke_pids="$smoke_pids $(pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus" || true)"
+all_smoke_pids="$(
+  { pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus-launcher" || true
+    pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus" || true; } | sort -u
+)"
+smoke_pids=""
+for pid in $all_smoke_pids; do
+  if ! grep -qx "$pid" <<<"$before_smoke_pids"; then
+    smoke_pids="$smoke_pids $pid"
+  fi
+done
 after_crashes="$(ls -1 "$crash_dir"/nautilus-*.ips 2>/dev/null | wc -l | tr -d ' ')"
 # Tear the smoke instance down no matter what (covers the translocated path).
 for pid in $smoke_pids; do kill "$pid" 2>/dev/null || true; done
 sleep 1
-pkill -f "Shenzhen Files.app/Contents/MacOS" 2>/dev/null || true
 if [[ "$after_crashes" -gt "$before_crashes" ]]; then
   fail "Launch smoke test FAILED: a new crash report appeared (the quarantined app crashed on launch)."
 fi
 [[ -n "$(echo "$smoke_pids" | tr -d ' ')" ]] \
   || fail "Launch smoke test FAILED: the quarantined app was not running after 8 s."
 log "Quarantined copy launched and stayed alive (no new crash) — killed."
+
+if [[ $PREPARE_ONLY -eq 1 ]]; then
+  local_sha="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+  log "Prepare-only complete: notarized DMG is ready at $DMG"
+  log "SHA-256: $local_sha"
+  log "No GitHub asset was uploaded and /Applications was not modified."
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Publish: clobber the release asset, re-verify the updater metadata
