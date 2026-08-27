@@ -16,7 +16,7 @@ let outputPath = CommandLine.arguments[1]
 let canvasSize = CGFloat(size)
 let sourceURL = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
-    .appendingPathComponent("AppIcon-source-v6.png")
+    .appendingPathComponent("AppIcon-source-v7.png")
 
 guard let source = NSImage(contentsOf: sourceURL) else {
     FileHandle.standardError.write("failed to load icon master at \(sourceURL.path)\n".data(using: .utf8)!)
