@@ -1,8 +1,8 @@
-// Renders the approved Shenzhen Files macOS app-icon foreground at any size.
+// Renders the approved Shenzhen Files macOS app-icon artwork at any size.
 //
-// The master contains only the polished folder on transparency. Do not bake a
-// rounded-square plate into these files: current macOS supplies the native app
-// icon enclosure, and embedding another one produces a double-squircle icon.
+// The master fills its square canvas with a white-to-icy-blue gradient but has
+// no pre-rounded corners. Current macOS supplies the final squircle mask; this
+// keeps the artwork large without producing a nested icon enclosure.
 //
 //   swift make-logo.swift <out.png> <pixel-size>
 import AppKit
@@ -16,7 +16,7 @@ let outputPath = CommandLine.arguments[1]
 let canvasSize = CGFloat(size)
 let sourceURL = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
-    .appendingPathComponent("AppIcon-source-v5.png")
+    .appendingPathComponent("AppIcon-source-v6.png")
 
 guard let source = NSImage(contentsOf: sourceURL) else {
     FileHandle.standardError.write("failed to load icon master at \(sourceURL.path)\n".data(using: .utf8)!)

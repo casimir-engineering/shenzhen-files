@@ -3,9 +3,9 @@
 # make-icon.sh — generate package/AppIcon.icns (and package/dmg-logo.png) from
 # the Shenzhen Files folder-first mark rendered by make-logo.swift.
 #
-# The folder remains visually dominant while the small 深圳 signature stays
-# fully inside it. Each iconset size contains foreground artwork on transparency
-# so macOS supplies one native enclosure instead of nesting two squircles.
+# The folder remains visually dominant while the 深圳 signature stays legible.
+# The source fills the square canvas but has no pre-rounded corners, allowing
+# macOS to apply one native enclosure without shrinking it into a nested icon.
 #
 # Usage:
 #   ./make-icon.sh
@@ -16,7 +16,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 logo_script="$script_dir/make-logo.swift"
-logo_source="$script_dir/AppIcon-source-v5.png"
+logo_source="$script_dir/AppIcon-source-v6.png"
 out_icns="$script_dir/AppIcon.icns"
 out_logo="$script_dir/dmg-logo.png"
 iconset="$script_dir/build/AppIcon.iconset"
