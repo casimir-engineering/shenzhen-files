@@ -4,8 +4,8 @@
 # the Shenzhen Files folder-first mark rendered by make-logo.swift.
 #
 # The folder remains visually dominant while the small 深圳 signature stays
-# fully inside it. Each iconset size is rendered full-bleed from the approved
-# high-resolution master through the same deterministic macOS squircle mask.
+# fully inside it. Each iconset size contains foreground artwork on transparency
+# so macOS supplies one native enclosure instead of nesting two squircles.
 #
 # Usage:
 #   ./make-icon.sh
@@ -16,7 +16,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 logo_script="$script_dir/make-logo.swift"
-logo_source="$script_dir/AppIcon-source-v3.png"
+logo_source="$script_dir/AppIcon-source-v4.png"
 out_icns="$script_dir/AppIcon.icns"
 out_logo="$script_dir/dmg-logo.png"
 iconset="$script_dir/build/AppIcon.iconset"
