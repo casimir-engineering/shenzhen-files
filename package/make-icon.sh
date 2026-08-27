@@ -4,8 +4,8 @@
 # the Shenzhen Files folder-first mark rendered by make-logo.swift.
 #
 # The folder remains visually dominant while the small 深圳 signature stays
-# fully inside it. Each iconset size is rendered from the approved high-
-# resolution master through the same deterministic macOS squircle mask.
+# fully inside it. Each iconset size is rendered full-bleed from the approved
+# high-resolution master through the same deterministic macOS squircle mask.
 #
 # Usage:
 #   ./make-icon.sh

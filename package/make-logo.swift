@@ -1,9 +1,9 @@
 // Renders the approved Shenzhen Files macOS app-icon master at any pixel size.
 //
-// The ImageGen master carries the polished folder artwork. This renderer adds
-// a deterministic, antialiased macOS rounded-square mask so stray extraction
-// pixels can never escape the icon, and so every iconset size shares exactly
-// the same safe bounds.
+// The ImageGen master carries the polished folder artwork. This renderer crops
+// its redundant transparent extraction fringe, then adds a deterministic,
+// antialiased macOS rounded-square mask so the tile fills the icon canvas and
+// every iconset size shares exactly the same bounds.
 //
 //   swift make-logo.swift <out.png> <pixel-size>
 import AppKit
@@ -44,17 +44,21 @@ let canvas = NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
 NSColor.clear.setFill()
 canvas.fill()
 
-// ImageGen correctly extracted alpha but left a few fringe pixels beyond the
-// tile. Keep a 5.5% optical margin and clip to a consistent App-style tile.
-let inset = canvasSize * 0.055
-let tile = canvas.insetBy(dx: inset, dy: inset)
-let mask = NSBezierPath(roundedRect: tile,
-                        xRadius: canvasSize * 0.205,
-                        yRadius: canvasSize * 0.205)
+// The approved master already contains a roughly 5.5% transparent extraction
+// fringe. Crop that fringe instead of adding another inset; macOS applies its
+// own optical sizing in the Dock, so an inset here made the app icon look tiny.
+let sourceInset = min(source.size.width, source.size.height) * 0.055
+let sourceCrop = NSRect(x: sourceInset,
+                        y: sourceInset,
+                        width: source.size.width - (sourceInset * 2),
+                        height: source.size.height - (sourceInset * 2))
+let mask = NSBezierPath(roundedRect: canvas,
+                        xRadius: canvasSize * 0.225,
+                        yRadius: canvasSize * 0.225)
 mask.addClip()
 
 source.draw(in: canvas,
-            from: NSRect(origin: .zero, size: source.size),
+            from: sourceCrop,
             operation: .sourceOver,
             fraction: 1.0,
             respectFlipped: true,
