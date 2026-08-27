@@ -16,7 +16,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 logo_script="$script_dir/make-logo.swift"
-logo_source="$script_dir/AppIcon-source-v4.png"
+logo_source="$script_dir/AppIcon-source-v5.png"
 out_icns="$script_dir/AppIcon.icns"
 out_logo="$script_dir/dmg-logo.png"
 iconset="$script_dir/build/AppIcon.iconset"
