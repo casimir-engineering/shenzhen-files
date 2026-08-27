@@ -3,9 +3,9 @@
 # make-icon.sh — generate package/AppIcon.icns (and package/dmg-logo.png) from
 # the Shenzhen Files folder-first mark rendered by make-logo.swift.
 #
-# The folder remains visually dominant while the small 深圳 signature preserves
-# the product family identity. Each iconset size is rendered natively by the
-# Swift script (clean geometry and no raster upscaling).
+# The folder remains visually dominant while the small 深圳 signature stays
+# fully inside it. Each iconset size is rendered from the approved high-
+# resolution master through the same deterministic macOS squircle mask.
 #
 # Usage:
 #   ./make-icon.sh
@@ -16,6 +16,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 logo_script="$script_dir/make-logo.swift"
+logo_source="$script_dir/AppIcon-source-v3.png"
 out_icns="$script_dir/AppIcon.icns"
 out_logo="$script_dir/dmg-logo.png"
 iconset="$script_dir/build/AppIcon.iconset"
@@ -23,6 +24,7 @@ iconset="$script_dir/build/AppIcon.iconset"
 command -v iconutil >/dev/null 2>&1 || { echo "error: iconutil not found" >&2; exit 1; }
 command -v swift >/dev/null 2>&1 || { echo "error: swift not found" >&2; exit 1; }
 [[ -f "$logo_script" ]] || { echo "error: $logo_script not found" >&2; exit 1; }
+[[ -f "$logo_source" ]] || { echo "error: $logo_source not found" >&2; exit 1; }
 
 rm -rf "$iconset"
 mkdir -p "$iconset"

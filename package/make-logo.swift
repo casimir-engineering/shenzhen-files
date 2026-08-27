@@ -1,8 +1,9 @@
-// Generates the Shenzhen Files folder-first logo on a transparent background.
+// Renders the approved Shenzhen Files macOS app-icon master at any pixel size.
 //
-// The folder is deliberately the dominant shape so the app remains identifiable
-// in a 16 px menu/Dock rendering. The small 深圳 signature keeps the Shenzhen
-// product identity without competing with the file-manager metaphor.
+// The ImageGen master carries the polished folder artwork. This renderer adds
+// a deterministic, antialiased macOS rounded-square mask so stray extraction
+// pixels can never escape the icon, and so every iconset size shares exactly
+// the same safe bounds.
 //
 //   swift make-logo.swift <out.png> <pixel-size>
 import AppKit
@@ -14,6 +15,14 @@ guard CommandLine.arguments.count >= 3, let size = Int(CommandLine.arguments[2])
 
 let outputPath = CommandLine.arguments[1]
 let canvasSize = CGFloat(size)
+let sourceURL = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appendingPathComponent("AppIcon-source-v3.png")
+
+guard let source = NSImage(contentsOf: sourceURL) else {
+    FileHandle.standardError.write("failed to load icon master at \(sourceURL.path)\n".data(using: .utf8)!)
+    exit(3)
+}
 
 let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
                               pixelsWide: size,
@@ -29,89 +38,27 @@ let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
 NSGraphicsContext.saveGraphicsState()
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 NSGraphicsContext.current?.imageInterpolation = .high
+NSGraphicsContext.current?.shouldAntialias = true
 
-// Start with genuinely transparent pixels even if a bitmap implementation
-// returns non-zeroed storage.
+let canvas = NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
 NSColor.clear.setFill()
-NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize).fill()
+canvas.fill()
 
-func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-    NSPoint(x: x * canvasSize, y: y * canvasSize)
-}
+// ImageGen correctly extracted alpha but left a few fringe pixels beyond the
+// tile. Keep a 5.5% optical margin and clip to a consistent App-style tile.
+let inset = canvasSize * 0.055
+let tile = canvas.insetBy(dx: inset, dy: inset)
+let mask = NSBezierPath(roundedRect: tile,
+                        xRadius: canvasSize * 0.205,
+                        yRadius: canvasSize * 0.205)
+mask.addClip()
 
-// A darker rear shell and lighter front flap make the silhouette read as a
-// folder, rather than a rounded rectangle, without gradients or fine detail.
-let rearBlue = NSColor(calibratedRed: 0.0,
-                       green: 92.0 / 255.0,
-                       blue: 156.0 / 255.0,
-                       alpha: 1.0)
-let frontBlue = NSColor(calibratedRed: 5.0 / 255.0,
-                        green: 132.0 / 255.0,
-                        blue: 197.0 / 255.0,
-                        alpha: 1.0)
-let signatureWhite = NSColor(calibratedWhite: 1.0, alpha: 0.92)
-
-let rear = NSBezierPath()
-rear.move(to: point(0.105, 0.245))
-rear.line(to: point(0.105, 0.695))
-rear.curve(to: point(0.185, 0.790),
-           controlPoint1: point(0.105, 0.750),
-           controlPoint2: point(0.140, 0.790))
-rear.line(to: point(0.345, 0.790))
-rear.curve(to: point(0.430, 0.705),
-           controlPoint1: point(0.385, 0.790),
-           controlPoint2: point(0.397, 0.705))
-rear.line(to: point(0.835, 0.705))
-rear.curve(to: point(0.895, 0.645),
-           controlPoint1: point(0.870, 0.705),
-           controlPoint2: point(0.895, 0.680))
-rear.line(to: point(0.895, 0.245))
-rear.close()
-rearBlue.setFill()
-rear.fill()
-
-let front = NSBezierPath()
-front.move(to: point(0.165, 0.665))
-front.curve(to: point(0.095, 0.585),
-            controlPoint1: point(0.125, 0.665),
-            controlPoint2: point(0.095, 0.625))
-front.line(to: point(0.132, 0.245))
-front.curve(to: point(0.225, 0.155),
-            controlPoint1: point(0.138, 0.190),
-            controlPoint2: point(0.175, 0.155))
-front.line(to: point(0.775, 0.155))
-front.curve(to: point(0.868, 0.245),
-            controlPoint1: point(0.825, 0.155),
-            controlPoint2: point(0.862, 0.190))
-front.line(to: point(0.905, 0.585))
-front.curve(to: point(0.835, 0.665),
-            controlPoint1: point(0.905, 0.625),
-            controlPoint2: point(0.875, 0.665))
-front.close()
-frontBlue.setFill()
-front.fill()
-
-func firstAvailableFont(names: [String], size: CGFloat) -> NSFont {
-    for name in names {
-        if let font = NSFont(name: name, size: size) {
-            return font
-        }
-    }
-    return NSFont.systemFont(ofSize: size, weight: .semibold)
-}
-
-let signature = "深圳" as NSString
-let signatureFont = firstAvailableFont(names: ["PingFangSC-Semibold", "PingFangSC-Medium"],
-                                       size: canvasSize * 0.125)
-let signatureAttributes: [NSAttributedString.Key: Any] = [
-    .font: signatureFont,
-    .foregroundColor: signatureWhite,
-    .kern: -canvasSize * 0.004,
-]
-let signatureSize = signature.size(withAttributes: signatureAttributes)
-signature.draw(at: NSPoint(x: canvasSize * 0.775 - signatureSize.width / 2,
-                           y: canvasSize * 0.235),
-               withAttributes: signatureAttributes)
+source.draw(in: canvas,
+            from: NSRect(origin: .zero, size: source.size),
+            operation: .sourceOver,
+            fraction: 1.0,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high])
 
 NSGraphicsContext.restoreGraphicsState()
 
