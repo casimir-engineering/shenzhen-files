@@ -51,7 +51,6 @@ BREW_DOMAINS=(glib20 gtk40 libadwaita gdk-pixbuf gsettings-desktop-schemas
 
 for f in "$INSTALL/bin/nautilus" "$INSTALL/lib/libnautilus-extension.4.dylib" \
          "$script_dir/Info.plist.template" "$script_dir/AppIcon.icns" \
-         "$script_dir/Assets.car" \
          "$script_dir/nautilus-launcher.c"; do
   [[ -e "$f" ]] || { echo "error: missing input: $f" >&2; exit 1; }
 done
@@ -78,7 +77,6 @@ cp "$script_dir/Info.plist.template" "$APP/Contents/Info.plist"
   "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 cp "$script_dir/AppIcon.icns" "$RES/AppIcon.icns"
-cp "$script_dir/Assets.car" "$RES/Assets.car"
 
 # --- share payload ---------------------------------------------------------------
 mkdir -p "$RES/share"

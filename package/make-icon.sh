@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 #
-# make-icon.sh — generate package/Assets.car, package/AppIcon.icns, and
-# package/dmg-logo.png from the Shenzhen Files folder-first mark rendered by
-# make-logo.swift.
+# make-icon.sh — generate package/AppIcon.icns (and package/dmg-logo.png) from
+# the Shenzhen Files folder-first mark rendered by make-logo.swift.
 #
 # The folder remains visually dominant while the small 深圳 signature stays
 # fully inside it. Each iconset size is rendered full-bleed from the approved
@@ -19,22 +18,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 logo_script="$script_dir/make-logo.swift"
 logo_source="$script_dir/AppIcon-source-v3.png"
 out_icns="$script_dir/AppIcon.icns"
-out_assets="$script_dir/Assets.car"
 out_logo="$script_dir/dmg-logo.png"
 iconset="$script_dir/build/AppIcon.iconset"
-catalog_template="$script_dir/Assets.xcassets"
-catalog="$script_dir/build/Assets.xcassets"
-catalog_output="$script_dir/build/asset-catalog-output"
-partial_plist="$script_dir/build/actool-partial.plist"
 
 command -v iconutil >/dev/null 2>&1 || { echo "error: iconutil not found" >&2; exit 1; }
 command -v swift >/dev/null 2>&1 || { echo "error: swift not found" >&2; exit 1; }
-command -v xcrun >/dev/null 2>&1 || { echo "error: xcrun not found" >&2; exit 1; }
-xcrun --find actool >/dev/null 2>&1 || { echo "error: actool not found (install Xcode)" >&2; exit 1; }
 [[ -f "$logo_script" ]] || { echo "error: $logo_script not found" >&2; exit 1; }
 [[ -f "$logo_source" ]] || { echo "error: $logo_source not found" >&2; exit 1; }
-[[ -f "$catalog_template/Contents.json" ]] || { echo "error: asset catalog metadata not found" >&2; exit 1; }
-[[ -f "$catalog_template/AppIcon.appiconset/Contents.json" ]] || { echo "error: app icon metadata not found" >&2; exit 1; }
 
 rm -rf "$iconset"
 mkdir -p "$iconset"
@@ -60,24 +50,6 @@ done
 
 iconutil -c icns "$iconset" -o "$out_icns"
 echo "wrote $out_icns"
-
-# CFBundleIconName refers to an asset-catalog name, not an .icns basename.
-# Compile the same ten renditions into Assets.car for modern macOS; retain the
-# .icns above only as the CFBundleIconFile fallback for older systems.
-rm -rf "$catalog" "$catalog_output"
-mkdir -p "$catalog/AppIcon.appiconset" "$catalog_output"
-cp "$catalog_template/Contents.json" "$catalog/"
-cp "$catalog_template/AppIcon.appiconset/Contents.json" "$catalog/AppIcon.appiconset/"
-cp "$iconset"/*.png "$catalog/AppIcon.appiconset/"
-xcrun actool "$catalog" \
-  --compile "$catalog_output" \
-  --platform macosx \
-  --minimum-deployment-target 12.0 \
-  --app-icon AppIcon \
-  --output-partial-info-plist "$partial_plist"
-[[ -f "$catalog_output/Assets.car" ]] || { echo "error: actool did not produce Assets.car" >&2; exit 1; }
-cp "$catalog_output/Assets.car" "$out_assets"
-echo "wrote $out_assets"
 
 # The DMG background generator (dmg-background.swift) draws this mark above
 # the wordmark; render a comfortable 512-px master.
