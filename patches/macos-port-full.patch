@@ -2307,13 +2307,21 @@ diff --git a/src/nautilus-file-operations.c b/src/nautilus-file-operations.c
 index 005815e..55dccb1 100644
 --- a/src/nautilus-file-operations.c
 +++ b/src/nautilus-file-operations.c
-@@ -65,1 +65,5 @@
+@@ -62,6 +62,10 @@
+ #include "nautilus-trash-monitor.h"
+ #include "nautilus-ui-utilities.h"
+ 
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
 +#endif
 +
  #ifdef GDK_WINDOWING_X11
-@@ -1648,2 +1652,13 @@ trash_file (CommonJob     *job,
+ #include <gdk/x11/gdkx.h>
+ #endif
+@@ -1645,7 +1649,18 @@ trash_file (CommonJob     *job,
+         return FALSE;
+     }
+ 
 +#ifdef __APPLE__
 +    /* GIO's Unix trash backend is not the Trash Finder displays on every
 +     * macOS installation. Use the native API for local files so both this
@@ -2327,6 +2335,8 @@ index 005815e..55dccb1 100644
      if (g_file_trash (file, job->cancellable, &error))
 +#endif
      {
+         transfer_info->num_files++;
+         nautilus_file_changes_queue_file_removed (file);
 @@ -3135,8 +3150,7 @@ verify_destination (CommonJob   *job,
      }
  
@@ -2676,7 +2686,7 @@ index 0d6200f..f643c34 100644
   * parse_previous_name:
   * @name: Name of the original file
 diff --git a/src/nautilus-files-view.c b/src/nautilus-files-view.c
-index dc65361..da2f178 100644
+index 2e390ad..8e6d6e0 100644
 --- a/src/nautilus-files-view.c
 +++ b/src/nautilus-files-view.c
 @@ -32,8 +32,10 @@
@@ -2896,7 +2906,7 @@ index dc65361..da2f178 100644
          }
      }
  }
-@@ -2779,19 +2936,19 @@ paste_files (NautilusFilesView *view,
+@@ -2779,6 +2936,16 @@ paste_files (NautilusFilesView *view,
      clipboard = gtk_widget_get_clipboard (GTK_WIDGET (view));
      formats = gdk_clipboard_get_formats (clipboard);
  
@@ -2913,20 +2923,7 @@ index dc65361..da2f178 100644
      view->selection_source = NAUTILUS_SELECTION_SOURCE_OP_START;
      real_dest_uri = dest_uri != NULL ? dest_uri : nautilus_files_view_get_backing_uri (view);
  
--    if (gdk_content_formats_contain_gtype (formats, GDK_TYPE_TEXTURE))
--    {
--        nautilus_file_operations_paste_image_from_clipboard (GTK_WIDGET (view),
--                                                             NULL,
--                                                             real_dest_uri,
--                                                             copy_move_done_callback,
--                                                             pre_copy_move (view));
--        return;
--    }
--
-     data = g_new0 (PasteCallbackData, 1);
-     data->dest_uri = real_dest_uri;
-     data->as_link = as_link;
-@@ -2821,6 +2978,34 @@ paste_files (NautilusFilesView *view,
+@@ -2811,6 +2978,23 @@ paste_files (NautilusFilesView *view,
                                          paste_value_received_callback,
                                          g_steal_pointer (&data));
      }
@@ -2947,21 +2944,10 @@ index dc65361..da2f178 100644
 +                                        g_steal_pointer (&data));
 +    }
 +#endif
-+    else if (gdk_content_formats_contain_gtype (formats, GDK_TYPE_TEXTURE))
-+    {
-+        /* Finder includes a rendered preview alongside a copied file URL.
-+         * Treat textures as an image paste only when no file representation
-+         * above is available, otherwise Cmd+C would paste the preview PNG. */
-+        nautilus_file_operations_paste_image_from_clipboard (GTK_WIDGET (view),
-+                                                             NULL,
-+                                                             real_dest_uri,
-+                                                             copy_move_done_callback,
-+                                                             pre_copy_move (view));
-+    }
- }
- 
- static void
-@@ -6270,6 +6454,23 @@ action_compress (GSimpleAction *action,
+     else if (gdk_content_formats_contain_gtype (formats, GDK_TYPE_TEXTURE))
+     {
+         /* Finder includes a rendered preview alongside a copied file URL.
+@@ -6271,6 +6455,23 @@ action_compress (GSimpleAction *action,
      nautilus_files_view_compress_dialog_new (view);
  }
  
@@ -2985,7 +2971,7 @@ index dc65361..da2f178 100644
  static void
  send_email_done (GObject      *source_object,
                   GAsyncResult *res,
-@@ -6314,6 +6515,7 @@ real_send_email (GStrv              attachments,
+@@ -6315,6 +6516,7 @@ real_send_email (GStrv              attachments,
                                NULL, NULL, NULL, NULL, (const char * const *) attachments,
                                XDP_EMAIL_FLAG_NONE, NULL, send_email_done, toplevel);
  }
@@ -2993,7 +2979,7 @@ index dc65361..da2f178 100644
  
  static void
  email_archive_ready (GFile    *new_file,
-@@ -6453,6 +6655,13 @@ can_set_wallpaper (NautilusFileList *selection)
+@@ -6454,6 +6656,13 @@ can_set_wallpaper (NautilusFileList *selection)
  {
      NautilusFile *file;
  
@@ -3007,7 +2993,7 @@ index dc65361..da2f178 100644
      if (!list_len_is_one (selection))
      {
          return FALSE;
-@@ -6469,6 +6678,7 @@ can_set_wallpaper (NautilusFileList *selection)
+@@ -6470,6 +6679,7 @@ can_set_wallpaper (NautilusFileList *selection)
      return TRUE;
  }
  
@@ -3015,7 +3001,7 @@ index dc65361..da2f178 100644
  static void
  set_wallpaper_with_portal_cb (GObject      *source,
                                GAsyncResult *result,
-@@ -6515,12 +6725,14 @@ set_wallpaper_with_portal (NautilusFile *file,
+@@ -6516,12 +6726,14 @@ set_wallpaper_with_portal (NautilusFile *file,
                                NULL);
      xdp_parent_free (parent);
  }
@@ -3030,7 +3016,7 @@ index dc65361..da2f178 100644
      g_autolist (NautilusFile) selection = NULL;
  
      g_assert (NAUTILUS_IS_FILES_VIEW (user_data));
-@@ -6534,6 +6746,7 @@ action_set_as_wallpaper (GSimpleAction *action,
+@@ -6535,6 +6747,7 @@ action_set_as_wallpaper (GSimpleAction *action,
  
          set_wallpaper_with_portal (file, user_data);
      }
@@ -3038,7 +3024,7 @@ index dc65361..da2f178 100644
  }
  
  static void
-@@ -6879,6 +7092,18 @@ const GActionEntry view_entries[] =
+@@ -6880,6 +7093,18 @@ const GActionEntry view_entries[] =
          .activate = action_open_current_directory_with_other_application
      },
      { .name = "open-current-directory-with-files", .activate = action_open_current_directory_with_files },
@@ -3057,7 +3043,7 @@ index dc65361..da2f178 100644
      { .name = "open-item-new-window", .activate = action_open_item_new_window },
      { .name = "open-item-new-tab", .activate = action_open_item_new_tab },
      { .name = "cut", .activate = action_cut},
-@@ -7538,6 +7763,91 @@ nautilus_files_view_update_actions_state (NautilusFilesView *self)
+@@ -7539,6 +7764,91 @@ nautilus_files_view_update_actions_state (NautilusFilesView *self)
      action = g_action_map_lookup_action (G_ACTION_MAP (view_action_group),
                                           "preview-selection");
      g_simple_action_set_enabled (G_SIMPLE_ACTION (action), selection != NULL);
@@ -3149,7 +3135,7 @@ index dc65361..da2f178 100644
      action = g_action_map_lookup_action (G_ACTION_MAP (view_action_group),
                                           "copy-current-location");
      g_simple_action_set_enabled (G_SIMPLE_ACTION (action),
-@@ -7932,6 +8242,24 @@ update_selection_menu (NautilusFilesView *self,
+@@ -7933,6 +8243,24 @@ update_selection_menu (NautilusFilesView *self,
          }
  
          g_free (item_label);
@@ -3174,7 +3160,7 @@ index dc65361..da2f178 100644
      }
  
      /* The "Open" submenu should be hidden if the item doesn't open in the view. */
-@@ -8072,6 +8400,55 @@ update_selection_menu (NautilusFilesView *self,
+@@ -8073,6 +8401,55 @@ update_selection_menu (NautilusFilesView *self,
                                           "hidden-when",
                                           !show_scripts ? "action-missing" : NULL);
  
@@ -3230,7 +3216,7 @@ index dc65361..da2f178 100644
      const char *view_name = NAUTILUS_IS_NETWORK_VIEW (self->list_base) ? "network" : "normal";
  
      /* Filter  the menus at the end to not interfere with other checks */
-@@ -8121,6 +8498,87 @@ update_background_menu (NautilusFilesView *self,
+@@ -8122,6 +8499,87 @@ update_background_menu (NautilusFilesView *self,
                                           "hidden-when",
                                           remove_submenu ? "action-missing" : NULL);
  
@@ -6786,10 +6772,10 @@ index 0000000..f6098b6
 +}
 diff --git a/src/nautilus-macos-menu.m b/src/nautilus-macos-menu.m
 new file mode 100644
-index 0000000..1999e2f
+index 0000000..ff3c49f
 --- /dev/null
 +++ b/src/nautilus-macos-menu.m
-@@ -0,0 +1,804 @@
+@@ -0,0 +1,812 @@
 +/*
 + * nautilus-macos-menu.m: native menu bar seams (W1).
 + *
@@ -6813,7 +6799,7 @@ index 0000000..1999e2f
 + * model as the NSMenu bar), so this file may stay nearly empty. It exists
 + * as W1's seam for any NSApplication/NSMenu-level work that GTK cannot
 + * express (e.g. the application menu's "About"/"Services" items) — and now
-+ * the dev-run Dock icon (see nautilus_macos_menu_init).
++ * the Dock icon (see nautilus_macos_menu_init).
 + */
 +
 +#define G_LOG_DOMAIN "nautilus-macos-bridge"
@@ -6829,13 +6815,13 @@ index 0000000..1999e2f
 +#import <AppKit/AppKit.h>
 +#import <objc/runtime.h>
 +
-+/* --- Dev-run Dock icon --------------------------------------------------- */
++/* --- Dock icon ----------------------------------------------------------- */
 +
 +/* A terminal/IDE launch of build/src/nautilus is not a .app bundle, so
 + * LaunchServices gives it a generic Dock icon. Set the official Nautilus
-+ * file-cabinet artwork explicitly in that case. When Nautilus IS running
-+ * from a bundle, the Info.plist CFBundleIconFile already supplies the icon
-+ * and we leave NSApplication alone.
++ * file-cabinet artwork explicitly in that case. Bundled launches also set
++ * AppIcon.icns explicitly so the relaunched app switches immediately after
++ * an in-place update instead of retaining LaunchServices' cached Dock image.
 + *
 + * Source of the image, in priority order:
 + *   1. $NAUTILUS_DOCK_ICON — an explicit .icns/.png path (dev override).
@@ -6855,30 +6841,37 @@ index 0000000..1999e2f
 +}
 +
 +static void
-+macos_set_dev_dock_icon (void)
++macos_set_dock_icon (void)
 +{
-+    if (macos_running_from_bundle ())
-+    {
-+        return;
-+    }
-+
-+    const char *override_path = g_getenv ("NAUTILUS_DOCK_ICON");
 +    g_autofree char *icon_path = NULL;
 +
-+    if (override_path != NULL && override_path[0] != '\0')
++    if (macos_running_from_bundle ())
 +    {
-+        icon_path = g_strdup (override_path);
++        NSString *bundled_path = [[NSBundle mainBundle] pathForResource:@"AppIcon"
++                                                                 ofType:@"icns"];
++        if (bundled_path != nil)
++        {
++            icon_path = g_strdup (bundled_path.fileSystemRepresentation);
++        }
 +    }
-+#ifdef NAUTILUS_DEV_DOCK_ICON_PATH
 +    else
 +    {
-+        icon_path = g_strdup (NAUTILUS_DEV_DOCK_ICON_PATH);
-+    }
++        const char *override_path = g_getenv ("NAUTILUS_DOCK_ICON");
++        if (override_path != NULL && override_path[0] != '\0')
++        {
++            icon_path = g_strdup (override_path);
++        }
++#ifdef NAUTILUS_DEV_DOCK_ICON_PATH
++        else
++        {
++            icon_path = g_strdup (NAUTILUS_DEV_DOCK_ICON_PATH);
++        }
 +#endif
++    }
 +
 +    if (icon_path == NULL || !g_file_test (icon_path, G_FILE_TEST_EXISTS))
 +    {
-+        g_debug ("dev Dock icon: no icon file found; leaving default");
++        g_debug ("Dock icon: no icon file found; leaving default");
 +        return;
 +    }
 +
@@ -6889,7 +6882,8 @@ index 0000000..1999e2f
 +        if (image != nil)
 +        {
 +            [NSApplication sharedApplication].applicationIconImage = image;
-+            g_debug ("dev Dock icon: set from %s", icon_path);
++            [[NSApplication sharedApplication].dockTile display];
++            g_debug ("Dock icon: set from %s", icon_path);
 +        }
 +    }
 +}
@@ -7585,11 +7579,11 @@ index 0000000..1999e2f
 +nautilus_macos_menu_init (void)
 +{
 +    /* The menu bar itself is GMenu on the GTK side; AppKit-level tweaks:
-+     * the dev-run Dock icon, and the app-menu "Check Permissions…" and
++     * the Dock icon, and the app-menu "Check Permissions…" and
 +     * "Finder Integration…" items (deferred until GTK has installed the
 +     * menubar; the latter also waits for the former so the order is
 +     * stable). */
-+    macos_set_dev_dock_icon ();
++    macos_set_dock_icon ();
 +    nautilus_macos_menu_add_check_permissions_item ();
 +    nautilus_macos_menu_add_finder_integration_item ();
 +    nautilus_macos_menu_add_check_updates_item ();
@@ -9982,10 +9976,10 @@ index 0000000..b2479cb
 +}
 diff --git a/src/nautilus-macos-updater.m b/src/nautilus-macos-updater.m
 new file mode 100644
-index 0000000..7afee9e
+index 0000000..bed4972
 --- /dev/null
 +++ b/src/nautilus-macos-updater.m
-@@ -0,0 +1,2189 @@
+@@ -0,0 +1,2341 @@
 +/*
 + * nautilus-macos-updater.m: GitHub-release self-updater (Shenzhen Files).
 + *
@@ -10035,6 +10029,8 @@ index 0000000..7afee9e
 +#import <CommonCrypto/CommonDigest.h>
 +
 +#include <fcntl.h>
++#include <errno.h>
++#include <string.h>
 +#include <unistd.h>
 +#include <signal.h>
 +#include <sys/stat.h>
@@ -10050,6 +10046,7 @@ index 0000000..7afee9e
 +static NSString *const kSZFAssetName = @"ShenzhenFiles-mac-arm64.dmg";
 +static NSString *const kSZFStagedAppName = @"Shenzhen Files.app";
 +static NSString *const kSZFSupportDirName = @"Shenzhen Files";
++static NSString *const kSZFPersistentStagingPrefix = @".shenzhen-files-update-";
 +
 +static const NSTimeInterval kSZFDailyInterval = 86400.0;      /* 24h gate */
 +static const NSTimeInterval kSZFIdleDelay = 5.0;              /* post-launch settle */
@@ -10352,6 +10349,8 @@ index 0000000..7afee9e
 +/* The extracted app must be Shenzhen Files (bundle-id pin) at the published
 + * version. Complements szf_verify_signed_bundle (the trust boundary) with
 + * the tag/version cross-check that catches a swapped payload. */
++static NSString *szf_bundle_version (NSString *appPath);
++
 +static BOOL
 +szf_verify_extracted_app (NSString *appPath, NSString *tag, NSError **error)
 +{
@@ -10365,30 +10364,30 @@ index 0000000..7afee9e
 +        }
 +        return NO;
 +    }
-+    NSString *shortVersion = bundle.infoDictionary[@"CFBundleShortVersionString"];
-+    NSArray<NSNumber *> *tagP = szf_version_components (tag);
-+    NSArray<NSNumber *> *appP = szf_version_components (shortVersion);
-+    /* Compare only the YY.M.DD primary key (tag carries -BUILD; plist may not). */
-+    if (tagP.count >= 3 && appP.count >= 3)
++    NSString *bundleVersion = szf_bundle_version (appPath);
++    if (bundleVersion.length == 0 || ![tag isEqualToString:bundleVersion])
 +    {
-+        if (!(tagP[0].longLongValue == appP[0].longLongValue &&
-+              tagP[1].longLongValue == appP[1].longLongValue &&
-+              tagP[2].longLongValue == appP[2].longLongValue))
++        if (error)
 +        {
-+            if (error)
-+            {
-+                *error = szf_make_error (@"The update did not match the published version.");
-+            }
-+            return NO;
++            *error = szf_make_error (@"The update did not match the published version and build.");
 +        }
++        return NO;
 +    }
 +    return YES;
 +}
 +
 +static NSString *
-+szf_bundle_short_version (NSString *appPath)
++szf_bundle_version (NSString *appPath)
 +{
-+    return [NSBundle bundleWithPath:appPath].infoDictionary[@"CFBundleShortVersionString"];
++    NSDictionary *info = [NSBundle bundleWithPath:appPath].infoDictionary;
++    NSString *shortVersion = info[@"CFBundleShortVersionString"];
++    NSString *build = info[(NSString *) kCFBundleVersionKey];
++    if (![shortVersion isKindOfClass:NSString.class] || shortVersion.length == 0 ||
++        ![build isKindOfClass:NSString.class] || build.length == 0)
++    {
++        return nil;
++    }
++    return [NSString stringWithFormat:@"%@-%@", shortVersion, build];
 +}
 +
 +/* ---------------------------------------------------------------------------
@@ -10505,7 +10504,10 @@ index 0000000..7afee9e
 +    for (NSRunningApplication *app in
 +         [NSRunningApplication runningApplicationsWithBundleIdentifier:kSZFAppBundleID])
 +    {
-+        if (app.processIdentifier != getpid ())
++        pid_t pid = app.processIdentifier;
++        BOOL processIsAlive = pid > 0 && pid != getpid () &&
++                              (kill (pid, 0) == 0 || errno == EPERM);
++        if (!app.terminated && processIsAlive)
 +        {
 +            ++count;
 +        }
@@ -10513,10 +10515,25 @@ index 0000000..7afee9e
 +    return count;
 +}
 +
++/* Remove only staging containers created by this updater. The helper moves
++ * the app out with rename(2), so the containing directory is normally empty
++ * at this point. */
++static void
++szf_helper_remove_staged_app (NSString *stagedAppPath)
++{
++    NSFileManager *fm = NSFileManager.defaultManager;
++    NSString *parentPath = stagedAppPath.stringByDeletingLastPathComponent;
++    [fm removeItemAtPath:stagedAppPath error:nil];
++    if ([parentPath.lastPathComponent hasPrefix:kSZFPersistentStagingPrefix])
++    {
++        [fm removeItemAtPath:parentPath error:nil];
++    }
++}
++
 +/* Clear updateInProgress and pendingTag from update.json on a helper abort.
 + * Foundation-only flock read-modify-write. */
 +static void
-+szf_helper_clear_update_state (void)
++szf_helper_clear_update_state (NSString *failure)
 +{
 +    NSString *dir = szf_support_dir_static ();
 +    NSString *lockPath = [dir stringByAppendingPathComponent:@"update.lock"];
@@ -10540,6 +10557,11 @@ index 0000000..7afee9e
 +    }
 +    [update removeObjectForKey:@"updateInProgress"];
 +    [update removeObjectForKey:@"pendingTag"];
++    if (failure.length)
++    {
++        update[@"lastUpdateError"] = failure;
++        update[@"lastUpdateErrorTimestamp"] = @([NSDate date].timeIntervalSince1970);
++    }
 +    NSData *out = [NSJSONSerialization dataWithJSONObject:update
 +                                                  options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys
 +                                                    error:nil];
@@ -10558,10 +10580,21 @@ index 0000000..7afee9e
 +szf_helper_relaunch_original (NSString *targetBundlePath)
 +{
 +    NSURL *originalURL = [NSURL fileURLWithPath:targetBundlePath];
-+    LSRegisterURL ((__bridge CFURLRef) originalURL, true);
++    OSStatus registrationStatus = LSRegisterURL ((__bridge CFURLRef) originalURL, true);
++    if (registrationStatus != noErr)
++    {
++        NSLog (@"Shenzhen Files updater: LaunchServices re-registration failed: %d",
++               (int) registrationStatus);
++    }
 +    [NSWorkspace.sharedWorkspace openApplicationAtURL:originalURL
 +                                        configuration:[NSWorkspaceOpenConfiguration configuration]
-+                                    completionHandler:nil];
++                                    completionHandler:^(NSRunningApplication *app, NSError *error) {
++                                        (void) app;
++                                        if (error)
++                                        {
++                                            NSLog (@"Shenzhen Files updater: relaunch failed: %@", error);
++                                        }
++                                    }];
 +}
 +
 +static BOOL
@@ -10611,13 +10644,14 @@ index 0000000..7afee9e
 +         * path (the staged copy sat in a temp dir across the quit window
 +         * where a local attacker could have swapped it). */
 +        NSError *verifyErr = nil;
-+        NSString *pendingTag = szf_bundle_short_version (stagedAppPath);
++        NSString *pendingTag = szf_bundle_version (stagedAppPath);
 +        if (!szf_verify_signed_bundle ([NSURL fileURLWithPath:stagedAppPath],
 +                                       /*isApp=*/YES, &verifyErr) ||
 +            !szf_verify_extracted_app (stagedAppPath, pendingTag, &verifyErr))
 +        {
-+            [fm removeItemAtPath:stagedAppPath error:nil];
-+            szf_helper_clear_update_state ();
++            NSLog (@"Shenzhen Files updater: staged app verification failed: %@", verifyErr);
++            szf_helper_remove_staged_app (stagedAppPath);
++            szf_helper_clear_update_state (@"The staged update failed verification.");
 +            szf_helper_relaunch_original (targetBundlePath);
 +            return 1;
 +        }
@@ -10636,7 +10670,10 @@ index 0000000..7afee9e
 +            for (NSRunningApplication *app in
 +                 [NSRunningApplication runningApplicationsWithBundleIdentifier:kSZFAppBundleID])
 +            {
-+                if (app.processIdentifier != getpid ())
++                pid_t pid = app.processIdentifier;
++                BOOL processIsAlive = pid > 0 && pid != getpid () &&
++                                      (kill (pid, 0) == 0 || errno == EPERM);
++                if (!app.terminated && processIsAlive)
 +                {
 +                    [app forceTerminate];
 +                }
@@ -10650,8 +10687,9 @@ index 0000000..7afee9e
 +        }
 +        if (szf_running_instance_count () > 0)
 +        {
-+            [fm removeItemAtPath:stagedAppPath error:nil];
-+            szf_helper_clear_update_state ();
++            NSLog (@"Shenzhen Files updater: old app instances did not exit");
++            szf_helper_remove_staged_app (stagedAppPath);
++            szf_helper_clear_update_state (@"The previous app instance did not exit.");
 +            szf_helper_relaunch_original (targetBundlePath);
 +            return 1;
 +        }
@@ -10667,7 +10705,10 @@ index 0000000..7afee9e
 +            if (rename (targetBundlePath.fileSystemRepresentation,
 +                        oldPath.fileSystemRepresentation) != 0)
 +            {
-+                szf_helper_clear_update_state ();
++                NSLog (@"Shenzhen Files updater: could not move old bundle aside: %s",
++                       strerror (errno));
++                szf_helper_remove_staged_app (stagedAppPath);
++                szf_helper_clear_update_state (@"The installed app could not be moved aside.");
 +                szf_helper_relaunch_original (targetBundlePath);
 +                return 1;
 +            }
@@ -10675,14 +10716,26 @@ index 0000000..7afee9e
 +        if (rename (stagedAppPath.fileSystemRepresentation,
 +                    targetBundlePath.fileSystemRepresentation) != 0)
 +        {
++            int swapError = errno;
 +            if (targetExists)
 +            {
 +                rename (oldPath.fileSystemRepresentation,
 +                        targetBundlePath.fileSystemRepresentation);
 +            }
-+            szf_helper_clear_update_state ();
++            NSLog (@"Shenzhen Files updater: could not install staged bundle: %s",
++                   strerror (swapError));
++            szf_helper_remove_staged_app (stagedAppPath);
++            szf_helper_clear_update_state (@"The staged app could not replace the installed app.");
 +            szf_helper_relaunch_original (targetBundlePath);
 +            return 1;
++        }
++
++        /* The app has moved to its final location; remove our now-empty,
++         * owner-only staging container. */
++        NSString *persistentParent = stagedAppPath.stringByDeletingLastPathComponent;
++        if ([persistentParent.lastPathComponent hasPrefix:kSZFPersistentStagingPrefix])
++        {
++            [fm removeItemAtPath:persistentParent error:nil];
 +        }
 +
 +        /* TRUST BOUNDARY (final): re-verify the code now sitting at the
@@ -10692,13 +10745,14 @@ index 0000000..7afee9e
 +                                       /*isApp=*/YES, NULL) ||
 +            !szf_verify_extracted_app (targetBundlePath, pendingTag, NULL))
 +        {
++            NSLog (@"Shenzhen Files updater: final bundle verification failed");
 +            [fm removeItemAtPath:targetBundlePath error:nil];
 +            if (targetExists)
 +            {
 +                rename (oldPath.fileSystemRepresentation,
 +                        targetBundlePath.fileSystemRepresentation);
 +            }
-+            szf_helper_clear_update_state ();
++            szf_helper_clear_update_state (@"The installed update failed final verification.");
 +            szf_helper_relaunch_original (targetBundlePath);
 +            return 1;
 +        }
@@ -10707,7 +10761,13 @@ index 0000000..7afee9e
 +
 +        /* Re-register LaunchServices on the final path, then relaunch. */
 +        NSURL *finalURL = [NSURL fileURLWithPath:targetBundlePath];
-+        LSRegisterURL ((__bridge CFURLRef) finalURL, true);
++        OSStatus registrationStatus = LSRegisterURL ((__bridge CFURLRef) finalURL, true);
++        if (registrationStatus != noErr)
++        {
++            NSLog (@"Shenzhen Files updater: LaunchServices registration failed: %d",
++                   (int) registrationStatus);
++        }
++        [NSWorkspace.sharedWorkspace noteFileSystemChanged:targetBundlePath];
 +
 +        NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
 +        config.createsNewApplicationInstance = YES;
@@ -10716,7 +10776,11 @@ index 0000000..7afee9e
 +                                            configuration:config
 +                                        completionHandler:^(NSRunningApplication *app, NSError *err) {
 +                                            (void) app;
-+                                            (void) err;
++                                            if (err)
++                                            {
++                                                NSLog (@"Shenzhen Files updater: updated app relaunch failed: %@",
++                                                       err);
++                                            }
 +                                            dispatch_semaphore_signal (sem);
 +                                        }];
 +        dispatch_semaphore_wait (sem, dispatch_time (DISPATCH_TIME_NOW,
@@ -11508,6 +11572,42 @@ index 0000000..7afee9e
 +        return;
 +    }
 +
++    /* NSItemReplacementDirectory is temporary and may be reclaimed as soon
++     * as this process exits. Move the verified app into an owner-only hidden
++     * sibling of the installed bundle so it survives the helper handoff and
++     * stays on the same volume for atomic rename(2). */
++    NSString *persistentName =
++        [kSZFPersistentStagingPrefix stringByAppendingString:NSUUID.UUID.UUIDString];
++    NSURL *persistentURL = [parentURL URLByAppendingPathComponent:persistentName
++                                                      isDirectory:YES];
++    NSError *persistentError = nil;
++    if (![fm createDirectoryAtURL:persistentURL
++       withIntermediateDirectories:NO
++                        attributes:@{ NSFilePosixPermissions: @0700 }
++                             error:&persistentError])
++    {
++        if (outError)
++        {
++            *outError = szf_make_error (@"Could not create secure persistent staging for the update.");
++        }
++        return;
++    }
++
++    NSString *persistentApp =
++        [persistentURL.path stringByAppendingPathComponent:kSZFStagedAppName];
++    if (rename (extractedApp.fileSystemRepresentation,
++                persistentApp.fileSystemRepresentation) != 0)
++    {
++        NSLog (@"Shenzhen Files updater: could not persist staged app: %s", strerror (errno));
++        [fm removeItemAtURL:persistentURL error:nil];
++        if (outError)
++        {
++            *outError = szf_make_error (@"Could not preserve the verified update for installation.");
++        }
++        return;
++    }
++    extractedApp = persistentApp;
++
 +    [self withLockedUpdateStore:^BOOL (NSMutableDictionary *update) {
 +        update[@"pendingTag"] = tag;
 +        update[@"updateInProgress"] = @{
@@ -11518,7 +11618,23 @@ index 0000000..7afee9e
 +    }];
 +
 +    [self dismissProgressOnMain];
-+    [self spawnPostUpdateHelperStaged:extractedApp target:bundlePath];
++    NSError *helperError = nil;
++    if (![self spawnPostUpdateHelperStaged:extractedApp
++                                     target:bundlePath
++                                      error:&helperError])
++    {
++        szf_helper_remove_staged_app (extractedApp);
++        [self withLockedUpdateStore:^BOOL (NSMutableDictionary *update) {
++            [update removeObjectForKey:@"pendingTag"];
++            [update removeObjectForKey:@"updateInProgress"];
++            return YES;
++        }];
++        if (outError)
++        {
++            *outError = helperError ?: szf_make_error (@"Could not start the update installer.");
++        }
++        return;
++    }
 +    if (outHelperLaunched)
 +    {
 +        *outHelperLaunched = YES;
@@ -11783,24 +11899,44 @@ index 0000000..7afee9e
 +                     appropriateForURL:parentURL
 +                                create:YES
 +                                 error:nil];
-+    if (!probe)
-+    {
-+        return;
-+    }
-+    NSURL *container = probe.URLByDeletingLastPathComponent;
-+    [fm removeItemAtURL:probe error:nil];
-+
 +    NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-kSZFLeaseStaleAfter];
-+    NSArray<NSURL *> *entries =
-+        [fm contentsOfDirectoryAtURL:container
++    if (probe)
++    {
++        NSURL *container = probe.URLByDeletingLastPathComponent;
++        [fm removeItemAtURL:probe error:nil];
++        NSArray<NSURL *> *entries =
++            [fm contentsOfDirectoryAtURL:container
++              includingPropertiesForKeys:@[ NSURLContentModificationDateKey ]
++                                 options:0
++                                   error:nil];
++        for (NSURL *entry in entries)
++        {
++            NSString *staged = [entry.path stringByAppendingPathComponent:kSZFStagedAppName];
++            NSString *stagedDmg = [entry.path stringByAppendingPathComponent:kSZFAssetName];
++            if (![fm fileExistsAtPath:staged] && ![fm fileExistsAtPath:stagedDmg])
++            {
++                continue;
++            }
++            NSDate *mtime = nil;
++            [entry getResourceValue:&mtime forKey:NSURLContentModificationDateKey error:nil];
++            if (mtime && [mtime compare:cutoff] == NSOrderedDescending)
++            {
++                continue;           /* recent; leave it */
++            }
++            [fm removeItemAtURL:entry error:nil];
++        }
++    }
++
++    /* Also sweep persistent handoff directories beside the installed app.
++     * The basename check ensures we never remove unrelated hidden folders. */
++    NSArray<NSURL *> *persistentEntries =
++        [fm contentsOfDirectoryAtURL:parentURL
 +          includingPropertiesForKeys:@[ NSURLContentModificationDateKey ]
 +                             options:0
 +                               error:nil];
-+    for (NSURL *entry in entries)
++    for (NSURL *entry in persistentEntries)
 +    {
-+        NSString *staged = [entry.path stringByAppendingPathComponent:kSZFStagedAppName];
-+        NSString *stagedDmg = [entry.path stringByAppendingPathComponent:kSZFAssetName];
-+        if (![fm fileExistsAtPath:staged] && ![fm fileExistsAtPath:stagedDmg])
++        if (![entry.lastPathComponent hasPrefix:kSZFPersistentStagingPrefix])
 +        {
 +            continue;
 +        }
@@ -11808,7 +11944,7 @@ index 0000000..7afee9e
 +        [entry getResourceValue:&mtime forKey:NSURLContentModificationDateKey error:nil];
 +        if (mtime && [mtime compare:cutoff] == NSOrderedDescending)
 +        {
-+            continue;               /* recent; leave it */
++            continue;
 +        }
 +        [fm removeItemAtURL:entry error:nil];
 +    }
@@ -11852,18 +11988,7 @@ index 0000000..7afee9e
 +        return;
 +    }
 +
-+    BOOL versionMatches = NO;
-+    if (running.length)
-+    {
-+        NSArray<NSNumber *> *tagP = szf_version_components (pendingTag);
-+        NSArray<NSNumber *> *runP = szf_version_components (running);
-+        if (tagP.count >= 3 && runP.count >= 3)
-+        {
-+            versionMatches = (tagP[0].longLongValue == runP[0].longLongValue &&
-+                              tagP[1].longLongValue == runP[1].longLongValue &&
-+                              tagP[2].longLongValue == runP[2].longLongValue);
-+        }
-+    }
++    BOOL versionMatches = running.length && [running isEqualToString:pendingTag];
 +
 +    if (versionMatches)
 +    {
@@ -11872,6 +11997,8 @@ index 0000000..7afee9e
 +            update[@"update_ok"] = okTag;
 +            [update removeObjectForKey:@"pendingTag"];
 +            [update removeObjectForKey:@"updateInProgress"];
++            [update removeObjectForKey:@"lastUpdateError"];
++            [update removeObjectForKey:@"lastUpdateErrorTimestamp"];
 +            return YES;
 +        }];
 +        [fm removeItemAtPath:oldPath error:nil];
@@ -11971,16 +12098,35 @@ index 0000000..7afee9e
 + * binary (not the launcher) is fine: nautilus-main.c short-circuits into
 + * nautilus_macos_updater_run_post_update_helper() before any GTK/GLib env
 + * is needed. */
-+- (void) spawnPostUpdateHelperStaged: (NSString *) stagedApp target: (NSString *) targetBundle
++- (BOOL) spawnPostUpdateHelperStaged: (NSString *) stagedApp
++                               target: (NSString *) targetBundle
++                                error: (NSError **) outError
 +{
 +    NSString *executable =
 +        [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Contents/MacOS/nautilus"];
++    if (![NSFileManager.defaultManager isExecutableFileAtPath:executable])
++    {
++        if (outError)
++        {
++            *outError = szf_make_error (@"The update installer executable was missing.");
++        }
++        return NO;
++    }
 +    NSTask *task = [[NSTask alloc] init];
 +    task.executableURL = [NSURL fileURLWithPath:executable];
 +    task.arguments = @[ @"--post-update", stagedApp, targetBundle ];
 +    task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
 +    task.standardError = [NSFileHandle fileHandleWithNullDevice];
-+    [task launchAndReturnError:nil];
++    NSError *launchError = nil;
++    if (![task launchAndReturnError:&launchError])
++    {
++        if (outError)
++        {
++            *outError = launchError ?: szf_make_error (@"The update installer could not start.");
++        }
++        return NO;
++    }
++    return YES;
 +}
 +
 +/* ----- UI: progress panel ----------------------------------------------------------- */
@@ -15036,7 +15182,7 @@ index e439d3c..b20c105 100644
      }
    }
  
-@@ -80,19 +80,19 @@ Adw.ShortcutsDialog shortcuts_dialog {
+@@ -80,24 +80,24 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Undo");
@@ -15059,11 +15205,12 @@ index e439d3c..b20c105 100644
      }
  
      Adw.ShortcutsItem {
-@@ -99,3 +99,3 @@ Adw.ShortcutsDialog shortcuts_dialog {
        title: C_("shortcuts dialog", "Delete Permanently");
 -      accelerator: "<shift>Delete";
 +      accelerator: "<Meta><Shift>BackSpace <shift>Delete";
      }
+   }
+ 
 @@ -116,14 +116,14 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
