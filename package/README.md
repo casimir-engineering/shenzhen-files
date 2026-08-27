@@ -38,6 +38,33 @@ records the pre-change system values in
 "Revert All Integrations" button). The Info.plist also declares a passive
 "Open in Shenzhen Files" Services-menu entry, which is harmless in standalone use.
 
+## Release procedure
+
+Every public release must include its documentation update in the same clean,
+tagged source state as the code being shipped. Before creating or moving the
+release tag:
+
+1. Update `SHORT_VERSION` and `BUNDLE_VERSION` in `make-app.sh`.
+2. Update the root `README.md`: change the `Latest <b>…</b>` marker to the full
+   `SHORT_VERSION-BUNDLE_VERSION` tag and document every user-visible change.
+   Review this packaging guide and `docs/STATUS.md` as well, updating them when
+   the release changes their claims or instructions.
+3. Regenerate changed assets, run the relevant tests and packaging checks, then
+   commit the code, generated artifacts, and documentation together. Require a
+   clean worktree before tagging.
+4. Point the release tag at that exact commit and push the branch and tag
+   together.
+5. Sign, notarize, staple, and Gatekeeper-test the DMG before publishing it.
+   Publish a normal release, not a draft or prerelease, with the notarized
+   `ShenzhenFiles-mac-arm64.dmg` asset.
+6. Verify GitHub's asset SHA-256 matches the local DMG and that
+   `/releases/latest/download/ShenzhenFiles-mac-arm64.dmg` redirects to the new
+   tag.
+
+`sign-and-notarize.sh` enforces the clean-worktree rule and checks that the root
+README's advertised release matches the bundle tag before it can notarize or
+publish anything.
+
 ## Release signing + notarization (optional, env-gated)
 
 By default everything is signed **ad-hoc** (`codesign -s -`), which is enough to

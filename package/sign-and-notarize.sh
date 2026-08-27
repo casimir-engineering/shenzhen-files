@@ -77,6 +77,10 @@ log "Identity present: $IDENTITY"
 gh auth status >/dev/null 2>&1 || fail "gh is not authenticated."
 log "gh authenticated."
 
+[[ -z "$(git status --porcelain=v1)" ]] \
+  || fail "Release worktree is not clean. Commit the code, generated assets, and documentation before releasing."
+log "Release worktree is clean."
+
 # ---------------------------------------------------------------------------
 # 1. Prompt-free probe: one codesign against a throwaway binary, 10-s cap.
 #    A broken key ACL turns EVERY codesign into a GUI password prompt; this
@@ -139,6 +143,10 @@ log "Deep verification passed."
 short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 build_no="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
 TAG="${short_ver}-${build_no}"
+readme_release_marker="Latest <b>$TAG</b>"
+grep -qF "$readme_release_marker" "$repo_root/README.md" \
+  || fail "README.md is stale: update its '$readme_release_marker' marker and document this release before publishing."
+log "README release marker matches $TAG."
 if [[ $PREPARE_ONLY -eq 0 ]]; then
   gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 \
     || fail "Release $TAG does not exist on $REPO — create it first (or fix the version)."
