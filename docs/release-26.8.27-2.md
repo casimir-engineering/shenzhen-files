@@ -15,12 +15,12 @@ and after the atomic bundle swap.
 
 ## One-time upgrade note
 
-Version `26.8.27-1` performs the final swap with its own installed helper. That
-helper can retain a stale LaunchServices record after the app exits and abort
-before replacement, so an already-installed `26.8.27-1` cannot reliably repair
-itself using only a newer downloaded bundle. If the automatic update leaves the
-old version installed, install this DMG once by dragging **Shenzhen Files** to
-Applications and replacing the existing copy. Automatic updates after
-`26.8.27-2` use the repaired installer path.
+Versions `26.7.22-1` and `26.8.27-1` perform the final swap with their own
+installed helper. That helper can retain a stale LaunchServices record after
+the app exits and abort before replacement, so those installed builds cannot
+reliably repair themselves using only a newer downloaded bundle. If the
+automatic update leaves the old version installed, install this DMG once by
+dragging **Shenzhen Files** to Applications and replacing the existing copy.
+Automatic updates after `26.8.27-2` use the repaired installer path.
 
 **Full Changelog:** https://github.com/casimir-engineering/shenzhen-files/compare/26.8.27-1...26.8.27-2

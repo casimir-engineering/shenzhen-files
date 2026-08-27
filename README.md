@@ -34,6 +34,12 @@ Download the DMG above and drag **Shenzhen Files** onto **Applications**.
 
 Releases are signed with Developer ID and notarized by Apple, so the app opens normally after download — no Gatekeeper workarounds needed.
 
+> **Upgrading from 26.7.22-1 or 26.8.27-1:** those builds perform the final
+> replacement with their already-installed updater helper, which can abort on
+> a stale macOS process record. If the old version remains after an automatic
+> update, install the current DMG once by replacing the app in Applications.
+> Releases from 26.8.27-2 onward use the repaired updater path.
+
 <details>
 <summary>First launch of an old, un-notarized build</summary>
 
