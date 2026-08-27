@@ -203,7 +203,8 @@ log "Quarantined copy accepted as Notarized Developer ID."
 # and require that it is still alive with NO fresh crash report.
 log "Launch smoke test on the quarantined copy…"
 crash_dir="$HOME/Library/Logs/DiagnosticReports"
-before_crashes="$(ls -1 "$crash_dir"/nautilus-*.ips 2>/dev/null | wc -l | tr -d ' ')"
+before_crashes="$(find "$crash_dir" -maxdepth 1 -type f -name 'nautilus-*.ips' -print 2>/dev/null |
+                  wc -l | tr -d ' ' || true)"
 # Isolate from the dev D-Bus so this can't touch the user's running instance.
 # NOTE: `open` on a quarantined bundle in a non-standard location triggers
 # Gatekeeper App Translocation — the app actually runs from a read-only
@@ -228,7 +229,8 @@ for pid in $all_smoke_pids; do
     smoke_pids="$smoke_pids $pid"
   fi
 done
-after_crashes="$(ls -1 "$crash_dir"/nautilus-*.ips 2>/dev/null | wc -l | tr -d ' ')"
+after_crashes="$(find "$crash_dir" -maxdepth 1 -type f -name 'nautilus-*.ips' -print 2>/dev/null |
+                 wc -l | tr -d ' ' || true)"
 # Tear the smoke instance down no matter what (covers the translocated path).
 for pid in $smoke_pids; do kill "$pid" 2>/dev/null || true; done
 sleep 1
