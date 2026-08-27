@@ -6774,10 +6774,10 @@ index 0000000..f6098b6
 +}
 diff --git a/src/nautilus-macos-menu.m b/src/nautilus-macos-menu.m
 new file mode 100644
-index 0000000..ff3c49f
+index 0000000..8d4039f
 --- /dev/null
 +++ b/src/nautilus-macos-menu.m
-@@ -0,0 +1,812 @@
+@@ -0,0 +1,805 @@
 +/*
 + * nautilus-macos-menu.m: native menu bar seams (W1).
 + *
@@ -6821,9 +6821,10 @@ index 0000000..ff3c49f
 +
 +/* A terminal/IDE launch of build/src/nautilus is not a .app bundle, so
 + * LaunchServices gives it a generic Dock icon. Set the official Nautilus
-+ * file-cabinet artwork explicitly in that case. Bundled launches also set
-+ * AppIcon.icns explicitly so the relaunched app switches immediately after
-+ * an in-place update instead of retaining LaunchServices' cached Dock image.
++ * file-cabinet artwork explicitly in that case. When Nautilus is running
++ * from a bundle, LaunchServices applies the bundle icon's native macOS
++ * enclosure and optical sizing; setting NSApplication.applicationIconImage
++ * directly would bypass that processing and make the raw artwork oversized.
 + *
 + * Source of the image, in priority order:
 + *   1. $NAUTILUS_DOCK_ICON — an explicit .icns/.png path (dev override).
@@ -6845,31 +6846,24 @@ index 0000000..ff3c49f
 +static void
 +macos_set_dock_icon (void)
 +{
-+    g_autofree char *icon_path = NULL;
-+
 +    if (macos_running_from_bundle ())
 +    {
-+        NSString *bundled_path = [[NSBundle mainBundle] pathForResource:@"AppIcon"
-+                                                                 ofType:@"icns"];
-+        if (bundled_path != nil)
-+        {
-+            icon_path = g_strdup (bundled_path.fileSystemRepresentation);
-+        }
++        return;
 +    }
++
++    const char *override_path = g_getenv ("NAUTILUS_DOCK_ICON");
++    g_autofree char *icon_path = NULL;
++
++    if (override_path != NULL && override_path[0] != '\0')
++    {
++        icon_path = g_strdup (override_path);
++    }
++#ifdef NAUTILUS_DEV_DOCK_ICON_PATH
 +    else
 +    {
-+        const char *override_path = g_getenv ("NAUTILUS_DOCK_ICON");
-+        if (override_path != NULL && override_path[0] != '\0')
-+        {
-+            icon_path = g_strdup (override_path);
-+        }
-+#ifdef NAUTILUS_DEV_DOCK_ICON_PATH
-+        else
-+        {
-+            icon_path = g_strdup (NAUTILUS_DEV_DOCK_ICON_PATH);
-+        }
-+#endif
++        icon_path = g_strdup (NAUTILUS_DEV_DOCK_ICON_PATH);
 +    }
++#endif
 +
 +    if (icon_path == NULL || !g_file_test (icon_path, G_FILE_TEST_EXISTS))
 +    {
@@ -6884,7 +6878,6 @@ index 0000000..ff3c49f
 +        if (image != nil)
 +        {
 +            [NSApplication sharedApplication].applicationIconImage = image;
-+            [[NSApplication sharedApplication].dockTile display];
 +            g_debug ("Dock icon: set from %s", icon_path);
 +        }
 +    }

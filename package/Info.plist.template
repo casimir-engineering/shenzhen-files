@@ -10,7 +10,9 @@
     <key>CFBundleExecutable</key>
     <string>nautilus-launcher</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon.icns</string>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.intuition.shenzhenfiles</string>
     <key>CFBundleInfoDictionaryVersion</key>
