@@ -48,7 +48,8 @@ release tag:
    `make-app.sh`. `BUNDLE_VERSION` must remain globally increasing across all
    releases; the GitHub/self-update tag is `SHORT_VERSION-RELEASE_BUILD`.
 2. Update the root `README.md`: change the `Latest <b>…</b>` marker to the full
-   `SHORT_VERSION-BUNDLE_VERSION` tag and document every user-visible change.
+   `SHORT_VERSION-RELEASE_BUILD` tag (the value stamped as `SZFReleaseTag`) and
+   document every user-visible change.
    Review this packaging guide and `docs/STATUS.md` as well, updating them when
    the release changes their claims or instructions.
 3. Regenerate changed assets, run the relevant tests and packaging checks, then
