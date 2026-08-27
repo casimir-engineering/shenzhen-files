@@ -44,7 +44,9 @@ Every public release must include its documentation update in the same clean,
 tagged source state as the code being shipped. Before creating or moving the
 release tag:
 
-1. Update `SHORT_VERSION` and `BUNDLE_VERSION` in `make-app.sh`.
+1. Update `SHORT_VERSION`, `RELEASE_BUILD`, and `BUNDLE_VERSION` in
+   `make-app.sh`. `BUNDLE_VERSION` must remain globally increasing across all
+   releases; the GitHub/self-update tag is `SHORT_VERSION-RELEASE_BUILD`.
 2. Update the root `README.md`: change the `Latest <b>…</b>` marker to the full
    `SHORT_VERSION-BUNDLE_VERSION` tag and document every user-visible change.
    Review this packaging guide and `docs/STATUS.md` as well, updating them when

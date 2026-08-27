@@ -4112,10 +4112,10 @@ index d22b5d9..087fe16 100644
      for (idx = 0; locations[idx] != NULL; idx++)
 diff --git a/src/nautilus-macos-bridge.h b/src/nautilus-macos-bridge.h
 new file mode 100644
-index 0000000..c009986
+index 0000000..e952f08
 --- /dev/null
 +++ b/src/nautilus-macos-bridge.h
-@@ -0,0 +1,600 @@
+@@ -0,0 +1,602 @@
 +/*
 + * nautilus-macos-bridge.h: C-callable API of the macOS Objective-C bridge.
 + *
@@ -4703,7 +4703,9 @@ index 0000000..c009986
 + * to exit, swaps the bundle with a move-aside two-rename, re-registers
 + * LaunchServices and relaunches. Returns a process exit code. */
 +int nautilus_macos_updater_run_post_update_helper (const char *staged_app_path,
-+                                                   const char *target_bundle_path);
++                                                   const char *target_bundle_path,
++                                                   const char *expected_release_tag,
++                                                   const char *ready_marker_path);
 +
 +/* Insert a native "Check for Updates…" NSMenuItem into the application
 + * (app-name) menu, right below "Finder Integration…" — same deferred,
@@ -9976,10 +9978,10 @@ index 0000000..b2479cb
 +}
 diff --git a/src/nautilus-macos-updater.m b/src/nautilus-macos-updater.m
 new file mode 100644
-index 0000000..bed4972
+index 0000000..5367954
 --- /dev/null
 +++ b/src/nautilus-macos-updater.m
-@@ -0,0 +1,2341 @@
+@@ -0,0 +1,2504 @@
 +/*
 + * nautilus-macos-updater.m: GitHub-release self-updater (Shenzhen Files).
 + *
@@ -10380,6 +10382,14 @@ index 0000000..bed4972
 +szf_bundle_version (NSString *appPath)
 +{
 +    NSDictionary *info = [NSBundle bundleWithPath:appPath].infoDictionary;
++    NSString *releaseTag = info[@"SZFReleaseTag"];
++    if ([releaseTag isKindOfClass:NSString.class] && releaseTag.length &&
++        szf_version_components (releaseTag))
++    {
++        return releaseTag;
++    }
++
++    /* Compatibility with builds published before SZFReleaseTag existed. */
 +    NSString *shortVersion = info[@"CFBundleShortVersionString"];
 +    NSString *build = info[(NSString *) kCFBundleVersionKey];
 +    if (![shortVersion isKindOfClass:NSString.class] || shortVersion.length == 0 ||
@@ -10533,7 +10543,7 @@ index 0000000..bed4972
 +/* Clear updateInProgress and pendingTag from update.json on a helper abort.
 + * Foundation-only flock read-modify-write. */
 +static void
-+szf_helper_clear_update_state (NSString *failure)
++szf_helper_record_update_failure (NSString *failure, BOOL clearLifecycle)
 +{
 +    NSString *dir = szf_support_dir_static ();
 +    NSString *lockPath = [dir stringByAppendingPathComponent:@"update.lock"];
@@ -10555,8 +10565,11 @@ index 0000000..bed4972
 +            update = obj;
 +        }
 +    }
-+    [update removeObjectForKey:@"updateInProgress"];
-+    [update removeObjectForKey:@"pendingTag"];
++    if (clearLifecycle)
++    {
++        [update removeObjectForKey:@"updateInProgress"];
++        [update removeObjectForKey:@"pendingTag"];
++    }
 +    if (failure.length)
 +    {
 +        update[@"lastUpdateError"] = failure;
@@ -10574,6 +10587,12 @@ index 0000000..bed4972
 +        flock (fd, LOCK_UN);
 +        close (fd);
 +    }
++}
++
++static void
++szf_helper_clear_update_state (NSString *failure)
++{
++    szf_helper_record_update_failure (failure, YES);
 +}
 +
 +static void
@@ -10625,17 +10644,26 @@ index 0000000..bed4972
 +
 +int
 +nautilus_macos_updater_run_post_update_helper (const char *staged_c,
-+                                               const char *target_c)
++                                               const char *target_c,
++                                               const char *expected_tag_c,
++                                               const char *ready_path_c)
 +{
 +    @autoreleasepool
 +    {
 +        NSString *stagedAppPath = staged_c ? @(staged_c) : nil;
 +        NSString *targetBundlePath = target_c ? @(target_c) : nil;
-+        if (stagedAppPath.length == 0 || targetBundlePath.length == 0)
++        NSString *expectedTag = expected_tag_c ? @(expected_tag_c) : nil;
++        NSString *readyPath = ready_path_c ? @(ready_path_c) : nil;
++        if (stagedAppPath.length == 0 || targetBundlePath.length == 0 ||
++            expectedTag.length == 0 || readyPath.length == 0)
 +        {
 +            return 1;
 +        }
-+        setsid ();          /* detach so we outlive the exiting parent */
++        if (setsid () < 0)  /* detach so we outlive the exiting parent */
++        {
++            NSLog (@"Shenzhen Files updater: helper detach failed: %s", strerror (errno));
++            return 1;
++        }
 +
 +        NSFileManager *fm = NSFileManager.defaultManager;
 +
@@ -10644,7 +10672,7 @@ index 0000000..bed4972
 +         * path (the staged copy sat in a temp dir across the quit window
 +         * where a local attacker could have swapped it). */
 +        NSError *verifyErr = nil;
-+        NSString *pendingTag = szf_bundle_version (stagedAppPath);
++        NSString *pendingTag = expectedTag;
 +        if (!szf_verify_signed_bundle ([NSURL fileURLWithPath:stagedAppPath],
 +                                       /*isApp=*/YES, &verifyErr) ||
 +            !szf_verify_extracted_app (stagedAppPath, pendingTag, &verifyErr))
@@ -10656,6 +10684,23 @@ index 0000000..bed4972
 +            return 1;
 +        }
 +        chmod (stagedAppPath.stringByDeletingLastPathComponent.fileSystemRepresentation, 0700);
++
++        /* Tell the parent it is now safe to quit only after detaching and
++         * re-verifying the exact release tag. The marker lives inside the
++         * unique owner-only staging directory. */
++        NSError *readyError = nil;
++        NSString *readyContents = [NSString stringWithFormat:@"%d\n", (int) getpid ()];
++        if (![readyContents writeToFile:readyPath
++                             atomically:YES
++                               encoding:NSUTF8StringEncoding
++                                  error:&readyError])
++        {
++            NSLog (@"Shenzhen Files updater: could not create ready marker: %@", readyError);
++            szf_helper_remove_staged_app (stagedAppPath);
++            szf_helper_clear_update_state (@"The update installer could not confirm readiness.");
++            szf_helper_relaunch_original (targetBundlePath);
++            return 1;
++        }
 +
 +        /* Bounded poll until all old-bundle instances exit; escalate to
 +         * forceTerminate on timeout, then a short settle. */
@@ -10717,13 +10762,27 @@ index 0000000..bed4972
 +                    targetBundlePath.fileSystemRepresentation) != 0)
 +        {
 +            int swapError = errno;
++            BOOL rollbackSucceeded = !targetExists;
 +            if (targetExists)
 +            {
-+                rename (oldPath.fileSystemRepresentation,
-+                        targetBundlePath.fileSystemRepresentation);
++                rollbackSucceeded =
++                    rename (oldPath.fileSystemRepresentation,
++                            targetBundlePath.fileSystemRepresentation) == 0;
 +            }
 +            NSLog (@"Shenzhen Files updater: could not install staged bundle: %s",
 +                   strerror (swapError));
++            if (!rollbackSucceeded)
++            {
++                NSLog (@"Shenzhen Files updater: rollback failed; old bundle retained at %@: %s",
++                       oldPath, strerror (errno));
++                szf_helper_record_update_failure (
++                    @"The update failed and the previous app is retained as “Shenzhen Files.app.old”.",
++                    YES);
++                [NSWorkspace.sharedWorkspace
++                    activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:oldPath] ]];
++                szf_helper_relaunch_original (oldPath);
++                return 1;
++            }
 +            szf_helper_remove_staged_app (stagedAppPath);
 +            szf_helper_clear_update_state (@"The staged app could not replace the installed app.");
 +            szf_helper_relaunch_original (targetBundlePath);
@@ -10746,11 +10805,28 @@ index 0000000..bed4972
 +            !szf_verify_extracted_app (targetBundlePath, pendingTag, NULL))
 +        {
 +            NSLog (@"Shenzhen Files updater: final bundle verification failed");
-+            [fm removeItemAtPath:targetBundlePath error:nil];
-+            if (targetExists)
++            NSError *removeError = nil;
++            BOOL removedFailedUpdate = [fm removeItemAtPath:targetBundlePath
++                                                      error:&removeError];
++            BOOL rollbackSucceeded = !targetExists;
++            if (targetExists && removedFailedUpdate)
 +            {
-+                rename (oldPath.fileSystemRepresentation,
-+                        targetBundlePath.fileSystemRepresentation);
++                rollbackSucceeded =
++                    rename (oldPath.fileSystemRepresentation,
++                            targetBundlePath.fileSystemRepresentation) == 0;
++            }
++            if (!rollbackSucceeded)
++            {
++                NSLog (@"Shenzhen Files updater: final-verification rollback failed "
++                       "(remove=%@, errno=%s); old bundle retained at %@",
++                       removeError, strerror (errno), oldPath);
++                szf_helper_record_update_failure (
++                    @"The installed update failed verification; the previous app is retained as “Shenzhen Files.app.old”.",
++                    YES);
++                [NSWorkspace.sharedWorkspace
++                    activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:oldPath] ]];
++                szf_helper_relaunch_original (oldPath);
++                return 1;
 +            }
 +            szf_helper_clear_update_state (@"The installed update failed final verification.");
 +            szf_helper_relaunch_original (targetBundlePath);
@@ -10772,10 +10848,20 @@ index 0000000..bed4972
 +        NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
 +        config.createsNewApplicationInstance = YES;
 +        dispatch_semaphore_t sem = dispatch_semaphore_create (0);
++        __block BOOL relaunchedExactBundle = NO;
++        __block NSError *relaunchError = nil;
++        NSString *expectedRelaunchPath =
++            finalURL.URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
 +        [NSWorkspace.sharedWorkspace openApplicationAtURL:finalURL
 +                                            configuration:config
 +                                        completionHandler:^(NSRunningApplication *app, NSError *err) {
-+                                            (void) app;
++                                            NSString *actualPath =
++                                                app.bundleURL.URLByStandardizingPath
++                                                             .URLByResolvingSymlinksInPath.path;
++                                            relaunchedExactBundle =
++                                                actualPath.length &&
++                                                [actualPath isEqualToString:expectedRelaunchPath];
++                                            relaunchError = err;
 +                                            if (err)
 +                                            {
 +                                                NSLog (@"Shenzhen Files updater: updated app relaunch failed: %@",
@@ -10783,8 +10869,48 @@ index 0000000..bed4972
 +                                            }
 +                                            dispatch_semaphore_signal (sem);
 +                                        }];
-+        dispatch_semaphore_wait (sem, dispatch_time (DISPATCH_TIME_NOW,
-+                                                     (int64_t) (20 * NSEC_PER_SEC)));
++        long waitResult =
++            dispatch_semaphore_wait (sem, dispatch_time (DISPATCH_TIME_NOW,
++                                                         (int64_t) (20 * NSEC_PER_SEC)));
++        if (waitResult != 0 || !relaunchedExactBundle)
++        {
++            NSLog (@"Shenzhen Files updater: exact-path relaunch not confirmed "
++                   "(timeout=%d, error=%@); trying open(1)",
++                   waitResult != 0, relaunchError);
++            szf_run_tool (@"/usr/bin/open", @[ @"-n", targetBundlePath ], NULL);
++            NSTimeInterval retryWaited = 0;
++            while (!relaunchedExactBundle && retryWaited < 5.0)
++            {
++                for (NSRunningApplication *app in
++                     [NSRunningApplication
++                         runningApplicationsWithBundleIdentifier:kSZFAppBundleID])
++                {
++                    NSString *actualPath =
++                        app.bundleURL.URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
++                    if (actualPath.length &&
++                        [actualPath isEqualToString:expectedRelaunchPath] &&
++                        !app.terminated)
++                    {
++                        relaunchedExactBundle = YES;
++                        break;
++                    }
++                }
++                if (!relaunchedExactBundle)
++                {
++                    [NSThread sleepForTimeInterval:0.25];
++                    retryWaited += 0.25;
++                }
++            }
++        }
++        if (!relaunchedExactBundle)
++        {
++            szf_helper_record_update_failure (
++                @"The update was installed, but the updated app could not reopen automatically.",
++                NO);
++            [NSWorkspace.sharedWorkspace
++                activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:targetBundlePath] ]];
++            return 1;
++        }
 +
 +        /* .old is retained until the relaunched process's pendingTag/update_ok
 +         * handshake confirms the new version came up (consume-marker path). */
@@ -10937,22 +11063,7 @@ index 0000000..bed4972
 +/* "YY.M.DD-BUILD" from the running bundle's Info.plist. Fails closed. */
 +- (NSString *) runningVersion
 +{
-+    NSDictionary *info = NSBundle.mainBundle.infoDictionary;
-+    NSString *shortVersion = info[@"CFBundleShortVersionString"];
-+    if (![shortVersion isKindOfClass:NSString.class] || shortVersion.length == 0)
-+    {
-+        return nil;
-+    }
-+    if (!szf_version_components (shortVersion))
-+    {
-+        return nil;
-+    }
-+    NSString *build = info[(NSString *) kCFBundleVersionKey];
-+    if (![build isKindOfClass:NSString.class] || build.length == 0)
-+    {
-+        build = @"1";
-+    }
-+    return [NSString stringWithFormat:@"%@-%@", shortVersion, build];
++    return szf_bundle_version (NSBundle.mainBundle.bundlePath);
 +}
 +
 +- (NSString *) userAgent
@@ -11621,6 +11732,7 @@ index 0000000..bed4972
 +    NSError *helperError = nil;
 +    if (![self spawnPostUpdateHelperStaged:extractedApp
 +                                     target:bundlePath
++                                expectedTag:tag
 +                                      error:&helperError])
 +    {
 +        szf_helper_remove_staged_app (extractedApp);
@@ -11964,11 +12076,17 @@ index 0000000..bed4972
 +    NSString *running = [self runningVersion];
 +
 +    __block NSString *pendingTag = nil;
++    __block NSString *lastUpdateError = nil;
 +    [self withLockedUpdateStore:^BOOL (NSMutableDictionary *update) {
 +        id pt = update[@"pendingTag"];
 +        if ([pt isKindOfClass:NSString.class] && [(NSString *) pt length])
 +        {
 +            pendingTag = pt;
++        }
++        id failure = update[@"lastUpdateError"];
++        if ([failure isKindOfClass:NSString.class] && [(NSString *) failure length])
++        {
++            lastUpdateError = failure;
 +        }
 +        return NO;
 +    }];
@@ -11985,6 +12103,21 @@ index 0000000..bed4972
 +            }
 +        }
 +        [self sweepStaleStagingDirs];
++        if (lastUpdateError.length)
++        {
++            NSString *failureToShow = lastUpdateError;
++            [self withLockedUpdateStore:^BOOL (NSMutableDictionary *update) {
++                [update removeObjectForKey:@"lastUpdateError"];
++                [update removeObjectForKey:@"lastUpdateErrorTimestamp"];
++                return YES;
++            }];
++            dispatch_async (dispatch_get_main_queue (), ^{
++                NSAlert *alert = [[NSAlert alloc] init];
++                alert.messageText = @"Software Update";
++                alert.informativeText = failureToShow;
++                [alert runModal];
++            });
++        }
 +        return;
 +    }
 +
@@ -12094,12 +12227,14 @@ index 0000000..bed4972
 +
 +/* ----- helper spawn --------------------------------------------------------------- */
 +
-+/* Spawn Contents/MacOS/nautilus --post-update <staged> <target>. The raw
++/* Spawn Contents/MacOS/nautilus --post-update <staged> <target> <tag> <ready>.
++ * The parent waits for the helper's ready marker before quitting. The raw
 + * binary (not the launcher) is fine: nautilus-main.c short-circuits into
 + * nautilus_macos_updater_run_post_update_helper() before any GTK/GLib env
 + * is needed. */
 +- (BOOL) spawnPostUpdateHelperStaged: (NSString *) stagedApp
 +                               target: (NSString *) targetBundle
++                          expectedTag: (NSString *) expectedTag
 +                                error: (NSError **) outError
 +{
 +    NSString *executable =
@@ -12112,9 +12247,13 @@ index 0000000..bed4972
 +        }
 +        return NO;
 +    }
++    NSString *readyPath =
++        [stagedApp.stringByDeletingLastPathComponent stringByAppendingPathComponent:
++                                                               @".helper-ready"];
++    [NSFileManager.defaultManager removeItemAtPath:readyPath error:nil];
 +    NSTask *task = [[NSTask alloc] init];
 +    task.executableURL = [NSURL fileURLWithPath:executable];
-+    task.arguments = @[ @"--post-update", stagedApp, targetBundle ];
++    task.arguments = @[ @"--post-update", stagedApp, targetBundle, expectedTag, readyPath ];
 +    task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
 +    task.standardError = [NSFileHandle fileHandleWithNullDevice];
 +    NSError *launchError = nil;
@@ -12126,7 +12265,33 @@ index 0000000..bed4972
 +        }
 +        return NO;
 +    }
-+    return YES;
++
++    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
++    while ([deadline timeIntervalSinceNow] > 0)
++    {
++        if ([NSFileManager.defaultManager fileExistsAtPath:readyPath])
++        {
++            [NSFileManager.defaultManager removeItemAtPath:readyPath error:nil];
++            return YES;
++        }
++        if (!task.running)
++        {
++            if (outError)
++            {
++                *outError = szf_make_error (@"The update installer exited before it was ready.");
++            }
++            return NO;
++        }
++        [NSThread sleepForTimeInterval:0.05];
++    }
++
++    [task terminate];
++    [task waitUntilExit];
++    if (outError)
++    {
++        *outError = szf_make_error (@"The update installer did not become ready.");
++    }
++    return NO;
 +}
 +
 +/* ----- UI: progress panel ----------------------------------------------------------- */
@@ -12322,7 +12487,7 @@ index 0000000..bed4972
 +    }
 +}
 diff --git a/src/nautilus-main.c b/src/nautilus-main.c
-index 3ca374e..eadf89d 100644
+index 3ca374e..460e158 100644
 --- a/src/nautilus-main.c
 +++ b/src/nautilus-main.c
 @@ -30,9 +30,15 @@
@@ -12341,19 +12506,21 @@ index 3ca374e..eadf89d 100644
  
  #include <locale.h>
  #ifdef HAVE_MALLOC_H
-@@ -48,6 +54,18 @@ main (int   argc,
+@@ -48,6 +54,20 @@ main (int   argc,
  {
      gint retval;
      NautilusApplication *application;
 +
 +#ifdef __APPLE__
 +    /* W14 self-updater: the detached post-update helper re-execs this same
-+     * binary with --post-update <staged.app> <target.app>. Short-circuit
++     * binary with --post-update <staged.app> <target.app> <tag> <ready>.
++     * Short-circuit
 +     * before any GTK/GLib setup — the helper is Foundation/AppKit-only and
 +     * must not spin up a second file-manager instance. */
-+    if (argc == 4 && strcmp (argv[1], "--post-update") == 0)
++    if (argc == 6 && strcmp (argv[1], "--post-update") == 0)
 +    {
-+        return nautilus_macos_updater_run_post_update_helper (argv[2], argv[3]);
++        return nautilus_macos_updater_run_post_update_helper (argv[2], argv[3],
++                                                              argv[4], argv[5]);
 +    }
 +#endif
 +

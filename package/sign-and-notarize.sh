@@ -139,10 +139,9 @@ MAC_SIGN_IDENTITY="$IDENTITY" ./package/bundle-dylibs.sh
 codesign --verify --deep --strict "$APP"
 log "Deep verification passed."
 
-# Read the version the bundle actually carries; derive the release tag.
-short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-build_no="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
-TAG="${short_ver}-${build_no}"
+# Read the explicit GitHub/self-update identity. CFBundleVersion is a separate,
+# globally increasing number used by macOS for bundle/cache ordering.
+TAG="$(/usr/libexec/PlistBuddy -c 'Print :SZFReleaseTag' "$APP/Contents/Info.plist")"
 readme_release_marker="Latest <b>$TAG</b>"
 grep -qF "$readme_release_marker" "$repo_root/README.md" \
   || fail "README.md is stale: update its '$readme_release_marker' marker and document this release before publishing."

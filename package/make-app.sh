@@ -34,12 +34,14 @@ INSTALL="$repo_root/install"
 APP="${1:-$repo_root/dist/Shenzhen Files.app}"
 
 # Identity stamped into Info.plist. Shenzhen-product conventions (mirrors
-# shenzhen-pdf): bundle id com.intuition.<product>, date-based version
-# YY.M.DD with CFBundleVersion as the same-day build number — together they
-# form the release tag YY.M.DD-BUILD the self-updater compares against.
+# shenzhen-pdf): bundle id com.intuition.<product>, date-based user version,
+# a globally increasing numeric CFBundleVersion for LaunchServices/App Store
+# cache semantics, and an explicit YY.M.DD-BUILD release tag for GitHub.
 BUNDLE_ID="com.intuition.shenzhenfiles"
 SHORT_VERSION="26.8.27"
-BUNDLE_VERSION="2"
+RELEASE_BUILD="2"
+BUNDLE_VERSION="26082702"
+RELEASE_TAG="$SHORT_VERSION-$RELEASE_BUILD"
 
 # Locales kept in the bundle (nautilus ships ~120; trim to a reasonable set).
 LOCALES=(ar ca cs da de el en_GB es eu fi fr gl he hi hu id it ja ko nb nl pl
@@ -74,6 +76,7 @@ cp "$script_dir/Info.plist.template" "$APP/Contents/Info.plist"
   -c "Set :CFBundleIdentifier $BUNDLE_ID" \
   -c "Set :CFBundleShortVersionString $SHORT_VERSION" \
   -c "Set :CFBundleVersion $BUNDLE_VERSION" \
+  -c "Set :SZFReleaseTag $RELEASE_TAG" \
   "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 cp "$script_dir/AppIcon.icns" "$RES/AppIcon.icns"
