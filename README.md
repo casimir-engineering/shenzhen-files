@@ -66,7 +66,7 @@ See [`package/README.md`](package/README.md) for the packaging details and [`doc
 
 ## Updater trust model
 
-Releases are signed with Developer ID and notarized (the same setup as Shenzhen PDF); the updater verifies each downloaded update offline with Security.framework — full Developer ID requirement with a pinned Team ID, a stapled-notarization check on the DMG, and hardened-runtime + bundle-id pins on the extracted app. The sha256 digest from the GitHub API is checked as a corruption heuristic. The swap is a move-aside two-rename with rollback, and the relaunched app confirms the version before the previous bundle is discarded. Release signing runs through `package/sign-and-notarize.sh` (sign every Mach-O with hardened runtime → styled DMG → `notarytool` → staple → Gatekeeper-simulate on a quarantined copy → publish).
+Releases are signed with Developer ID and notarized (the same setup as Shenzhen PDF); the updater verifies each downloaded update offline with Security.framework — full Developer ID requirement with a pinned Team ID, a stapled-notarization check on the DMG, and hardened-runtime + bundle-id pins on the extracted app. The sha256 digest from the GitHub API is checked as a corruption heuristic. The helper acknowledges verified persistent staging before the parent exits; the swap is a move-aside two-rename with checked rollback, and the relaunched app confirms the exact release tag before the previous bundle is discarded. A separate globally increasing `CFBundleVersion` keeps macOS bundle and icon caches ordered correctly. Release signing runs through `package/sign-and-notarize.sh` (sign every Mach-O with hardened runtime → styled DMG → `notarytool` → staple → Gatekeeper-simulate on a quarantined copy → publish).
 
 ## License
 
