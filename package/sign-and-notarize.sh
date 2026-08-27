@@ -199,46 +199,36 @@ log "Quarantined copy accepted as Notarized Developer ID."
 # Launch smoke test: an accepted signature is NOT proof the app RUNS (the
 # hardened runtime can still SIGABRT on a dlopen Library Validation rejection,
 # which is exactly how the 26.7.19-1 tag-manager crash slipped through). Launch
-# the quarantined copy in the background, give it time to reach steady state,
-# and require that it is still alive with NO fresh crash report.
+# the quarantined copy's executable directly so LaunchServices cannot hand the
+# request to an already-running installed copy with the same bundle id. The
+# launcher execs the real binary in-place, so its PID remains authoritative.
 log "Launch smoke test on the quarantined copy…"
 crash_dir="$HOME/Library/Logs/DiagnosticReports"
 before_crashes="$(find "$crash_dir" -maxdepth 1 -type f -name 'nautilus-*.ips' -print 2>/dev/null |
                   wc -l | tr -d ' ' || true)"
-# Isolate from the dev D-Bus so this can't touch the user's running instance.
-# NOTE: `open` on a quarantined bundle in a non-standard location triggers
-# Gatekeeper App Translocation — the app actually runs from a read-only
-# /private/var/folders/.../AppTranslocation/... path, NOT from $qtest_dir. So
-# match the process by bundle name anywhere, and treat a NEW crash report as
-# the authoritative failure signal (a hardened-runtime dlopen rejection SIGABRTs
-# within ~2 s, which is exactly the class of bug this test exists to catch).
-before_smoke_pids="$(
-  { pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus-launcher" || true
-    pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus" || true; } | sort -u
-)"
+# Isolate from the dev D-Bus so this cannot join or touch the user's running
+# instance. Keep stdout/stderr for a useful failure report.
+smoke_log="$qtest_dir/launch-smoke.log"
 DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/szf-smoke-nobus.sock" \
-  open -g -n "$qtest_dir/Shenzhen Files.app" 2>/dev/null || true
+  "$qtest_dir/Shenzhen Files.app/Contents/MacOS/nautilus-launcher" \
+  >"$smoke_log" 2>&1 &
+smoke_pid=$!
 sleep 8
-all_smoke_pids="$(
-  { pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus-launcher" || true
-    pgrep -f "Shenzhen Files.app/Contents/MacOS/nautilus" || true; } | sort -u
-)"
-smoke_pids=""
-for pid in $all_smoke_pids; do
-  if ! grep -qx "$pid" <<<"$before_smoke_pids"; then
-    smoke_pids="$smoke_pids $pid"
-  fi
-done
+smoke_alive=0
+kill -0 "$smoke_pid" 2>/dev/null && smoke_alive=1
 after_crashes="$(find "$crash_dir" -maxdepth 1 -type f -name 'nautilus-*.ips' -print 2>/dev/null |
                  wc -l | tr -d ' ' || true)"
-# Tear the smoke instance down no matter what (covers the translocated path).
-for pid in $smoke_pids; do kill "$pid" 2>/dev/null || true; done
+# Tear down only the exact process started above; never touch an installed copy.
+kill "$smoke_pid" 2>/dev/null || true
+wait "$smoke_pid" 2>/dev/null || true
 sleep 1
 if [[ "$after_crashes" -gt "$before_crashes" ]]; then
   fail "Launch smoke test FAILED: a new crash report appeared (the quarantined app crashed on launch)."
 fi
-[[ -n "$(echo "$smoke_pids" | tr -d ' ')" ]] \
-  || fail "Launch smoke test FAILED: the quarantined app was not running after 8 s."
+if [[ $smoke_alive -ne 1 ]]; then
+  sed -n '1,120p' "$smoke_log" >&2
+  fail "Launch smoke test FAILED: the quarantined app was not running after 8 s."
+fi
 log "Quarantined copy launched and stayed alive (no new crash) — killed."
 
 if [[ $PREPARE_ONLY -eq 1 ]]; then
