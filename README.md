@@ -25,6 +25,7 @@
 - **System integration, strictly opt-in** — open folders by default, sync Finder's sidebar favorites, hide the Finder desktop. Everything is off by default, revertible, and records the prior system state before changing anything.
 - **Native Trash and permanent delete** — regular deletion moves items to the system Trash; Shift+Delete asks for confirmation before permanently deleting them. Show in Finder, Open in Terminal, and "Open With" are also bridged to native macOS services.
 - **Full Disk Access onboarding** — a one-time walkthrough for the TCC grant that browsing the Trash needs.
+- **Full-canvas macOS icon** — the blue folder and legible 深圳 mark sit on one native-style rounded square with genuinely transparent outer corners, so Dock and Finder never expose a raw square canvas.
 - **Auto-update** — a silent daily check against GitHub releases plus a "Check for Updates…" menu item; updates download into persistent secure staging, verify offline (Developer ID + notarization, pinned Team ID and bundle id), atomically swap the bundle, refresh the app icon, and relaunch the exact new build in place.
 
 ## Install
