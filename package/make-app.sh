@@ -39,7 +39,7 @@ APP="${1:-$repo_root/dist/Shenzhen Files.app}"
 # form the release tag YY.M.DD-BUILD the self-updater compares against.
 BUNDLE_ID="com.intuition.shenzhenfiles"
 SHORT_VERSION="26.8.27"
-BUNDLE_VERSION="1"
+BUNDLE_VERSION="2"
 
 # Locales kept in the bundle (nautilus ships ~120; trim to a reasonable set).
 LOCALES=(ar ca cs da de el en_GB es eu fi fr gl he hi hu id it ja ko nb nl pl
