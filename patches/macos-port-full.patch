@@ -4,7 +4,7 @@ index 3c14aa4..858f3b6 100644
 +++ b/data/org.gnome.nautilus.gschema.xml
 @@ -77,6 +77,11 @@
    </schema>
- 
+
    <schema path="/org/gnome/nautilus/preferences/" id="org.gnome.nautilus.preferences" gettext-domain="nautilus">
 +    <key type="s" name="starting-location">
 +      <default>''</default>
@@ -34,7 +34,7 @@ index 61c6b0b..6a728af 100644
 @@ -101,28 +101,71 @@ pkgconfig = import('pkgconfig')
  ################
  glib_ver = '>= 2.84.0'
- 
+
 +macos_port = get_option('macos_port')
 +
 +if macos_port
@@ -67,7 +67,7 @@ index 61c6b0b..6a728af 100644
 +endif
 +
  libm = cc.find_library('m')
- 
+
 -subproject('libgxdp',
 -  default_options: [
 -    'tests=false',
@@ -82,7 +82,7 @@ index 61c6b0b..6a728af 100644
 +    ],
 +  )
 +endif
- 
+
  gio = dependency('gio-2.0', version: glib_ver)
  gio_unix = dependency('gio-unix-2.0', version: glib_ver)
  glib = dependency('glib-2.0', version: glib_ver)
@@ -169,7 +169,7 @@ index c15e6ce..fc8f798 100644
 @@ -289,37 +278,142 @@ libnautilus_sources = [
    'nautilus-x-content-bar.h',
  ]
- 
+
 +libnautilus_objc_args = []
 +
 +if macos_port
@@ -269,7 +269,7 @@ index c15e6ce..fc8f798 100644
    selinux,
    tinysparql,
  ]
- 
+
 +if macos_port
 +  nautilus_deps += [
 +    gsettings_desktop_schemas,
@@ -294,7 +294,7 @@ index c15e6ce..fc8f798 100644
 +  include_directories: nautilus_include_dirs,
 +  objc_args: libnautilus_objc_args
  )
- 
+
 +libnautilus_link_with = [libnautilus]
 +
 +if macos_port
@@ -310,7 +310,7 @@ index c15e6ce..fc8f798 100644
 +endif
 +
  libnautilus_include_dirs = include_directories('.')
- 
+
  libnautilus_dep = declare_dependency(
 -  link_with: libnautilus,
 +  link_with: libnautilus_link_with,
@@ -324,7 +324,7 @@ index a45977b..5e5020e 100644
 @@ -18,6 +18,17 @@
  #include <glib/gi18n.h>
  #include <gio/gio.h>
- 
+
 +#ifdef __APPLE__
 +#include <gio/gosxappinfo.h>
 +#include <glib/gstdio.h>
@@ -918,7 +918,7 @@ index a45977b..5e5020e 100644
 @@ -542,6 +998,47 @@ setup_listitem_cb (GtkListItemFactory *factory,
      gtk_list_item_set_child (list_item, box);
  }
- 
+
 +#ifdef __APPLE__
 +/* GOsxAppInfo icons are GFileIcons pointing at the bundle's .icns file,
 + * which gdk-pixbuf cannot decode (modern icns variants) — rows would all
@@ -966,7 +966,7 @@ index a45977b..5e5020e 100644
 @@ -550,7 +1047,18 @@ bind_listitem_cb (GtkListItemFactory *factory,
      GtkWidget *label = gtk_widget_get_next_sibling (image);
      NautilusAppItem *app_item = gtk_list_item_get_item (list_item);
- 
+
 -    gtk_image_set_from_gicon (GTK_IMAGE (image), g_app_info_get_icon (app_item->app_info));
 +#ifdef __APPLE__
 +    GdkTexture *texture = macos_app_icon_for_app_info (app_item->app_info);
@@ -1205,9 +1205,9 @@ index 0abe9f1..a8864c4 100644
  }
 
 @@ -237,6 +243,12 @@ nautilus_app_chooser_constructed (GObject *object)
- 
+
      adw_dialog_set_title (ADW_DIALOG (self), title);
- 
+
 +#ifdef __APPLE__
 +    /* GOsxAppInfo cannot change the LaunchServices default handler
 +     * (g_app_info_set_as_default_for_type is a silent no-op), so don't
@@ -1223,10 +1223,10 @@ index 0abe9f1..a8864c4 100644
      }
 +#endif
  }
- 
+
  static void
 diff --git a/src/nautilus-application.c b/src/nautilus-application.c
-index 397cbf3..0be4de1 100644
+index 397cbf3..1f48d41 100644
 --- a/src/nautilus-application.c
 +++ b/src/nautilus-application.c
 @@ -35,9 +35,12 @@
@@ -1241,8 +1241,13 @@ index 397cbf3..0be4de1 100644
 +#include <string.h>
  #include <sys/stat.h>
  #include <sys/types.h>
- 
-@@ -55,8 +58,14 @@
+
+@@ -51,12 +54,19 @@
+ #include "nautilus-file-operations.h"
+ #include "nautilus-file-undo-manager.h"
+ #include "nautilus-file-utilities.h"
++#include "nautilus-fd-holder.h"
+ #include "nautilus-files-view.h"
  #include "nautilus-freedesktop-dbus.h"
  #include "nautilus-global-preferences.h"
  #include "nautilus-icon-info.h"
@@ -1257,20 +1262,28 @@ index 397cbf3..0be4de1 100644
  #include "nautilus-preferences-dialog.h"
  #include "nautilus-previewer.h"
  #include "nautilus-progress-persistence-handler.h"
-@@ -76,7 +85,9 @@ struct _NautilusApplication
+@@ -68,6 +78,7 @@
+ #include "nautilus-trash-monitor.h"
+ #include "nautilus-ui-utilities.h"
+ #include "nautilus-window.h"
++#include "nautilus-window-slot.h"
+
+ struct _NautilusApplication
+ {
+@@ -76,7 +87,9 @@ struct _NautilusApplication
      NautilusProgressPersistenceHandler *progress_handler;
      NautilusDBusManager *dbus_manager;
      NautilusFreedesktopDBus *fdb_manager;
 +#ifndef __APPLE__
      NautilusPortal *portal_implementation;
 +#endif
- 
+
      NautilusBookmarkList *bookmark_list;
- 
-@@ -101,6 +112,66 @@ struct _NautilusApplication
- 
+
+@@ -101,6 +114,66 @@ struct _NautilusApplication
+
  G_DEFINE_FINAL_TYPE (NautilusApplication, nautilus_application, ADW_TYPE_APPLICATION)
- 
+
 +#ifdef __APPLE__
 +/* On macOS, GDK maps the Command key to GDK_META_MASK. GTK4 parses both
 + * "<Control>" and "<Primary>" accelerator strings to the (physical) Control
@@ -1334,16 +1347,16 @@ index 397cbf3..0be4de1 100644
  void
  nautilus_application_set_accelerator (GApplication *app,
                                        const gchar  *action_name,
-@@ -112,7 +183,7 @@ nautilus_application_set_accelerator (GApplication *app,
+@@ -112,7 +185,7 @@ nautilus_application_set_accelerator (GApplication *app,
          NULL
      };
- 
+
 -    gtk_application_set_accels_for_action (GTK_APPLICATION (app), action_name, vaccels);
 +    nautilus_application_set_accelerators (app, action_name, vaccels);
  }
- 
+
  void
-@@ -120,6 +191,26 @@ nautilus_application_set_accelerators (GApplication  *app,
+@@ -120,6 +193,26 @@ nautilus_application_set_accelerators (GApplication  *app,
                                         const gchar   *action_name,
                                         const gchar  **accels)
  {
@@ -1369,11 +1382,137 @@ index 397cbf3..0be4de1 100644
 +
      gtk_application_set_accels_for_action (GTK_APPLICATION (app), action_name, accels);
  }
- 
-@@ -256,6 +347,14 @@ nautilus_application_create_window (NautilusApplication *self)
+
+@@ -129,6 +222,125 @@ nautilus_application_get_windows (NautilusApplication *self)
+     return self->windows;
+ }
+
++typedef struct
++{
++    GFile *mount_root;
++    GFile *home;
++    GList *redirected_slots;
++    gint64 deadline;
++} PrepareUnmountData;
++
++static void
++prepare_unmount_data_free (PrepareUnmountData *data)
++{
++    g_clear_object (&data->mount_root);
++    g_clear_object (&data->home);
++    g_list_free_full (data->redirected_slots, g_object_unref);
++    g_free (data);
++}
++
++static gboolean
++prepare_unmount_poll (gpointer user_data)
++{
++    GTask *task = G_TASK (user_data);
++    PrepareUnmountData *data = g_task_get_task_data (task);
++
++    if (g_task_return_error_if_cancelled (task))
++    {
++        return G_SOURCE_REMOVE;
++    }
++
++    for (GList *l = data->redirected_slots; l != NULL; l = l->next)
++    {
++        NautilusWindowSlot *slot = l->data;
++        GFile *location = nautilus_window_slot_get_location (slot);
++        GFile *pending_location = nautilus_window_slot_get_pending_location (slot);
++
++        if (location == NULL || !g_file_equal (location, data->home) ||
++            pending_location != NULL || nautilus_window_slot_get_loading (slot))
++        {
++            if (g_get_monotonic_time () >= data->deadline)
++            {
++                g_task_return_new_error (task,
++                                         G_IO_ERROR,
++                                         G_IO_ERROR_BUSY,
++                                         "Timed out waiting for tabs to leave the volume");
++                return G_SOURCE_REMOVE;
++            }
++
++            return G_SOURCE_CONTINUE;
++        }
++    }
++
++    nautilus_fd_holders_release_for_location (data->mount_root);
++    g_task_return_boolean (task, TRUE);
++    return G_SOURCE_REMOVE;
++}
++
++void
++nautilus_application_prepare_location_for_unmount_async (NautilusApplication *self,
++                                                         GFile               *mount_root,
++                                                         GCancellable        *cancellable,
++                                                         GAsyncReadyCallback  callback,
++                                                         gpointer             user_data)
++{
++    g_autoptr (GTask) task = NULL;
++    PrepareUnmountData *data;
++
++    g_return_if_fail (NAUTILUS_IS_APPLICATION (self));
++    g_return_if_fail (G_IS_FILE (mount_root));
++
++    task = g_task_new (self, cancellable, callback, user_data);
++    g_task_set_source_tag (task, nautilus_application_prepare_location_for_unmount_async);
++
++    data = g_new0 (PrepareUnmountData, 1);
++    data->mount_root = g_object_ref (mount_root);
++    data->home = g_file_new_for_path (g_get_home_dir ());
++    data->deadline = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
++    g_task_set_task_data (task, data, (GDestroyNotify) prepare_unmount_data_free);
++
++    if (g_file_equal (data->home, mount_root) ||
++        g_file_has_prefix (data->home, mount_root))
++    {
++        g_task_return_new_error (task,
++                                 G_IO_ERROR,
++                                 G_IO_ERROR_BUSY,
++                                 "Home is located on the volume being ejected");
++        return;
++    }
++
++    for (GList *l = self->windows; l != NULL; l = l->next)
++    {
++        GList *window_slots =
++            nautilus_window_redirect_slots_from_location (l->data,
++                                                          mount_root,
++                                                          data->home);
++        data->redirected_slots = g_list_concat (data->redirected_slots, window_slots);
++    }
++
++    /* Poll through at least one main-loop turn even when no tab was moved.
++     * This lets queued file-view cleanup finish before enumerators are closed. */
++    g_timeout_add_full (G_PRIORITY_DEFAULT,
++                        25,
++                        prepare_unmount_poll,
++                        g_object_ref (task),
++                        g_object_unref);
++}
++
++gboolean
++nautilus_application_prepare_location_for_unmount_finish (NautilusApplication *self,
++                                                          GAsyncResult        *result,
++                                                          GError             **error)
++{
++    g_return_val_if_fail (g_task_is_valid (result, self), FALSE);
++    g_return_val_if_fail (g_async_result_is_tagged (
++                              result,
++                              nautilus_application_prepare_location_for_unmount_async),
++                          FALSE);
++
++    return g_task_propagate_boolean (G_TASK (result), error);
++}
++
+ NautilusBookmarkList *
+ nautilus_application_get_bookmarks (NautilusApplication *self)
+ {
+@@ -256,6 +468,14 @@ nautilus_application_create_window (NautilusApplication *self)
          gtk_widget_add_css_class (GTK_WIDGET (window), "devel");
      }
- 
+
 +#ifdef __APPLE__
 +    /* Cold-launch placement: center the FIRST window of the process on the
 +     * screen the mouse was on at startup (one-shot no-op afterwards; size,
@@ -1383,12 +1522,12 @@ index 397cbf3..0be4de1 100644
 +#endif
 +
      g_debug ("Creating a new navigation window");
- 
+
      return window;
-@@ -508,18 +607,43 @@ nautilus_application_select (NautilusApplication  *self,
+@@ -508,18 +728,43 @@ nautilus_application_select (NautilusApplication  *self,
      }
  }
- 
+
 +/* Where windows open when no explicit location was given (app launch, Dock
 + * reopen, New Window, --new-window): the "starting-location" preference if
 + * it names an existing folder, otherwise home. Explicit-location paths (CLI
@@ -1422,17 +1561,17 @@ index 397cbf3..0be4de1 100644
      NautilusApplication *application;
 -    g_autoptr (GFile) home = NULL;
 +    g_autoptr (GFile) location = NULL;
- 
+
      application = NAUTILUS_APPLICATION (user_data);
 -    home = g_file_new_for_path (g_get_home_dir ());
 +    location = nautilus_application_get_starting_location ();
- 
+
 -    nautilus_application_open_location_full (application, home,
 +    nautilus_application_open_location_full (application, location,
                                               NAUTILUS_OPEN_FLAG_NEW_WINDOW,
                                               NULL, NULL);
  }
-@@ -547,6 +671,41 @@ action_clone_window (GSimpleAction *action,
+@@ -547,6 +792,41 @@ action_clone_window (GSimpleAction *action,
                                               NAUTILUS_OPEN_FLAG_NEW_WINDOW, NULL, NULL);
  }
 
@@ -1474,10 +1613,10 @@ index 397cbf3..0be4de1 100644
  static void
  action_preferences (GSimpleAction *action,
                      GVariant      *parameter,
-@@ -606,6 +765,49 @@ action_help (GSimpleAction *action,
+@@ -606,6 +886,49 @@ action_help (GSimpleAction *action,
      }
  }
- 
+
 +#ifdef __APPLE__
 +/* ==========================================================================
 + * Finder-like Dock lifecycle (darwin)
@@ -1524,10 +1663,10 @@ index 397cbf3..0be4de1 100644
  static void
  action_kill (GSimpleAction *action,
               GVariant      *parameter,
-@@ -625,6 +827,17 @@ action_quit (GSimpleAction *action,
+@@ -625,6 +948,17 @@ action_quit (GSimpleAction *action,
      NautilusApplication *self = NAUTILUS_APPLICATION (user_data);
      GList *windows, *l;
- 
+
 +#ifdef __APPLE__
 +    /* Finder-like Dock lifecycle: startup took a g_application_hold() so
 +     * that closing the last window keeps the app alive in the Dock. An
@@ -1542,10 +1681,10 @@ index 397cbf3..0be4de1 100644
      windows = nautilus_application_get_windows (self);
      /* make a copy, since the original list will be modified when destroying
       * a window, making this list invalid */
-@@ -637,10 +850,41 @@ action_quit (GSimpleAction *action,
+@@ -637,10 +971,41 @@ action_quit (GSimpleAction *action,
      g_list_free (windows);
  }
- 
+
 +#ifdef __APPLE__
 +static void
 +action_fda_prompt (GSimpleAction *action,
@@ -1584,7 +1723,7 @@ index 397cbf3..0be4de1 100644
      { .name = "preferences", .activate = action_preferences },
      { .name = "search-settings", .activate = action_search_settings },
      { .name = "about", .activate = action_about },
-@@ -659,12 +903,37 @@ nautilus_init_application_actions (NautilusApplication *app)
+@@ -659,12 +1024,37 @@ nautilus_init_application_actions (NautilusApplication *app)
 
      nautilus_application_set_accelerator (G_APPLICATION (app),
                                            "app.clone-window", "<Primary>n");
@@ -1620,18 +1759,18 @@ index 397cbf3..0be4de1 100644
 +    }
 +#endif
  }
- 
+
  static void
-@@ -680,7 +949,7 @@ nautilus_application_activate (GApplication *app)
+@@ -680,7 +1070,7 @@ nautilus_application_activate (GApplication *app)
      }
- 
+
      files = g_malloc0 (2 * sizeof (GFile *));
 -    files[0] = g_file_new_for_path (g_get_home_dir ());
 +    files[0] = nautilus_application_get_starting_location ();
      nautilus_application_open (app, files, 1, NULL);
- 
+
      g_object_unref (files[0]);
-@@ -736,7 +1005,7 @@ nautilus_application_handle_file_args (NautilusApplication *self,
+@@ -736,7 +1126,7 @@ nautilus_application_handle_file_args (NautilusApplication *self,
      }
      else if (g_variant_dict_contains (options, "new-window"))
      {
@@ -1640,10 +1779,10 @@ index 397cbf3..0be4de1 100644
          g_ptr_array_add (file_array, file);
      }
      else
-@@ -994,11 +1263,624 @@ nautilus_application_identify_to_portal (GApplication *app)
+@@ -994,11 +1384,624 @@ nautilus_application_identify_to_portal (GApplication *app)
                              NULL, NULL, NULL);
  }
- 
+
 +#ifdef __APPLE__
 +
 +/* ==========================================================================
@@ -2253,7 +2392,7 @@ index 397cbf3..0be4de1 100644
  nautilus_application_startup (GApplication *app)
  {
      NautilusApplication *self = NAUTILUS_APPLICATION (app);
- 
+
 +#ifdef __APPLE__
 +    /* Capture the screen under the mouse NOW, before GTK startup takes its
 +     * time: for a Dock-click launch the pointer is on the Dock's screen,
@@ -2263,28 +2402,28 @@ index 397cbf3..0be4de1 100644
 +#endif
 +
      g_application_set_resource_base_path (G_APPLICATION (self), "/org/gnome/nautilus");
- 
+
      /* Register the app with the host app registry in XDG Desktop Portal before
-@@ -1011,6 +1893,7 @@ nautilus_application_startup (GApplication *app)
+@@ -1011,6 +2014,7 @@ nautilus_application_startup (GApplication *app)
          nautilus_application_identify_to_portal (app);
      }
- 
+
 +#ifndef __APPLE__
      /* Initialize GDK display (for wayland-x11-interop protocol) before GTK does
       * it during the chain-up. */
      g_autoptr (GError) error = NULL;
-@@ -1027,6 +1910,7 @@ nautilus_application_startup (GApplication *app)
+@@ -1027,6 +2031,7 @@ nautilus_application_startup (GApplication *app)
          g_message ("Failed to initialize display server connection: %s",
                     error->message);
      }
 +#endif
- 
+
      /* Chain up to the GtkApplication implementation early, so that gtk_init()
       * is called for us.
-@@ -1057,6 +1941,65 @@ nautilus_application_startup (GApplication *app)
- 
+@@ -1057,6 +2062,65 @@ nautilus_application_startup (GApplication *app)
+
      nautilus_init_application_actions (self);
- 
+
 +#ifdef __APPLE__
 +    /* Deliberate TCC access attempt, unconditionally once per launch and
 +     * with no UI: this is what makes Nautilus appear (initially off) in
@@ -2347,10 +2486,10 @@ index 397cbf3..0be4de1 100644
      if (!g_test_initialized ())
      {
          maybe_migrate_gtk_filechooser_preferences ();
-@@ -1090,11 +2033,13 @@ nautilus_application_dbus_register (GApplication     *app,
+@@ -1090,11 +2154,13 @@ nautilus_application_dbus_register (GApplication     *app,
          return FALSE;
      }
- 
+
 +#ifndef __APPLE__
      self->portal_implementation = nautilus_portal_new ();
      if (!nautilus_portal_register (self->portal_implementation, connection, error))
@@ -2358,13 +2497,13 @@ index 397cbf3..0be4de1 100644
          return FALSE;
      }
 +#endif
- 
+
      self->search_provider = nautilus_shell_search_provider_new ();
      if (!nautilus_shell_search_provider_register (self->search_provider, connection, error))
-@@ -1126,11 +2071,13 @@ nautilus_application_dbus_unregister (GApplication    *app,
+@@ -1126,11 +2192,13 @@ nautilus_application_dbus_unregister (GApplication    *app,
          g_clear_object (&self->fdb_manager);
      }
- 
+
 +#ifndef __APPLE__
      if (self->portal_implementation != NULL)
      {
@@ -2372,13 +2511,13 @@ index 397cbf3..0be4de1 100644
          g_clear_object (&self->portal_implementation);
      }
 +#endif
- 
+
      if (self->search_provider)
      {
-@@ -1146,6 +2093,14 @@ update_dbus_opened_locations (NautilusApplication *self)
+@@ -1146,6 +2214,14 @@ update_dbus_opened_locations (NautilusApplication *self)
  {
      self->dbus_location_update_timeout_id = 0;
- 
+
 +    /* When no session bus is available (common on macOS), dbus_register is
 +     * skipped, so there is no FileManager1 manager and no D-Bus object path.
 +     * Nothing to publish in that case — return quietly instead of asserting. */
@@ -2390,10 +2529,10 @@ index 397cbf3..0be4de1 100644
      g_autoptr (GHashTable) hashed_locations = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                                       g_free, NULL);
      const gchar *dbus_object_path = g_application_get_dbus_object_path (G_APPLICATION (self));
-@@ -1207,6 +2162,95 @@ schedule_dbus_location_update (NautilusApplication *self)
+@@ -1207,6 +2283,95 @@ schedule_dbus_location_update (NautilusApplication *self)
      }
  }
- 
+
 +#ifdef __APPLE__
 +/* One-time-ever first-launch Full Disk Access prompt (W6). Shown at most
 + * once across ALL launches: the keyfile flag is set the moment the prompt
@@ -2486,10 +2625,10 @@ index 397cbf3..0be4de1 100644
  static void
  nautilus_application_window_added (GtkApplication *app,
                                     GtkWindow      *window)
-@@ -1217,11 +2261,22 @@ nautilus_application_window_added (GtkApplication *app,
- 
+@@ -1217,11 +2382,22 @@ nautilus_application_window_added (GtkApplication *app,
+
      GTK_APPLICATION_CLASS (nautilus_application_parent_class)->window_added (app, window);
- 
+
 +#ifdef __APPLE__
 +    /* Every toplevel (main window and standalone dialogs alike) must keep
 +     * native window controls disabled — see GTK #7964 note above. */
@@ -2508,8 +2647,8 @@ index 397cbf3..0be4de1 100644
 +#endif
      }
  }
- 
-@@ -1317,6 +2372,10 @@ nautilus_application_search (NautilusApplication *self,
+
+@@ -1317,6 +2493,10 @@ nautilus_application_search (NautilusApplication *self,
  gboolean
  nautilus_application_is_sandboxed (void)
  {
@@ -2518,14 +2657,43 @@ index 397cbf3..0be4de1 100644
 +    return FALSE;
 +#else
      static gboolean ret;
- 
+
      static gsize init = 0;
-@@ -1328,4 +2387,5 @@ nautilus_application_is_sandboxed (void)
+@@ -1328,4 +2508,5 @@ nautilus_application_is_sandboxed (void)
      }
- 
+
      return ret;
 +#endif
  }
+diff --git a/src/nautilus-application.h b/src/nautilus-application.h
+index 28a4388..458c9a3 100644
+--- a/src/nautilus-application.h
++++ b/src/nautilus-application.h
+@@ -45,10 +45,21 @@ void nautilus_application_set_accelerators (GApplication *app,
+
+ GList * nautilus_application_get_windows (NautilusApplication *application);
+
++/* Move all tabs viewing @mount_root to Home and wait until the replacement
++ * views are idle, then release directory enumerators for the old volume. */
++void nautilus_application_prepare_location_for_unmount_async (NautilusApplication *application,
++                                                              GFile               *mount_root,
++                                                              GCancellable        *cancellable,
++                                                              GAsyncReadyCallback  callback,
++                                                              gpointer             user_data);
++gboolean nautilus_application_prepare_location_for_unmount_finish (NautilusApplication *application,
++                                                                   GAsyncResult        *result,
++                                                                   GError             **error);
++
+ void nautilus_application_open_location (NautilusApplication *application,
+-					 GFile *location,
+-					 GFile *selection,
+-					 const char *startup_id);
++	                                      GFile               *location,
++	                                      GFile               *selection,
++	                                      const char        *startup_id);
+
+ NautilusWindow *
+ nautilus_application_open_location_full (NautilusApplication *application,
 diff --git a/src/nautilus-clipboard.c b/src/nautilus-clipboard.c
 index f8a1358..bd932b3 100644
 --- a/src/nautilus-clipboard.c
@@ -2533,7 +2701,7 @@ index f8a1358..bd932b3 100644
 @@ -112,6 +112,38 @@ nautilus_clipboard_from_string (char    *string,
      return clip;
  }
- 
+
 +/**
 + * nautilus_clipboard_clear:
 + * @clipboard: the clipboard to release our claim on
@@ -2583,7 +2751,7 @@ index bc71305..8d34a67 100644
 --- a/src/nautilus-clipboard.h
 +++ b/src/nautilus-clipboard.h
 @@ -30,6 +30,7 @@ GType              nautilus_clipboard_get_type     (void);
- 
+
  void nautilus_clipboard_clear_if_colliding_uris    (GtkWidget          *widget,
                                                      const GList        *item_uris);
 +void nautilus_clipboard_clear                      (GdkClipboard       *clipboard);
@@ -2619,7 +2787,7 @@ index 5fce3d3..af938c3 100644
 --- a/src/nautilus-dbus-launcher.c
 +++ b/src/nautilus-dbus-launcher.c
 @@ -94,7 +94,14 @@ on_nautilus_dbus_proxy_ready (GObject      *source_object,
- 
+
      if (error != NULL)
      {
 +#ifdef __APPLE__
@@ -2632,10 +2800,10 @@ index 5fce3d3..af938c3 100644
 +#endif
      }
  }
- 
+
 @@ -189,6 +196,12 @@ proxy_ready (GObject      *object,
      GDBusConnection *connection;
- 
+
      self->proxy = g_dbus_proxy_new_for_bus_finish (res, NULL);
 +    if (self->proxy == NULL)
 +    {
@@ -2663,15 +2831,15 @@ index 9500892..c9949a9 100644
 +            nautilus_filesystem_is_readonly (location, info);
          file->details->filesystem_remote = g_file_info_get_attribute_boolean (info, G_FILE_ATTRIBUTE_FILESYSTEM_REMOTE);
      }
- 
+
 diff --git a/src/nautilus-dnd.c b/src/nautilus-dnd.c
 index ac36461..2169f64 100644
 --- a/src/nautilus-dnd.c
 +++ b/src/nautilus-dnd.c
 @@ -10,6 +10,10 @@
- 
+
  #include <glib/gi18n.h>
- 
+
 +#ifdef __APPLE__
 +#include <dlfcn.h>
 +#endif
@@ -2682,7 +2850,7 @@ index ac36461..2169f64 100644
 @@ -20,6 +24,370 @@
  #include "nautilus-tag-manager.h"
  #include "nautilus-ui-utilities.h"
- 
+
 +#ifdef __APPLE__
 +
 +/* macOS pasteboard interop.
@@ -3053,7 +3221,7 @@ index ac36461..2169f64 100644
 @@ -168,6 +536,13 @@ nautilus_dnd_get_preferred_action (NautilusFile *target_file,
      gboolean same_fs;
      gboolean source_deletable;
- 
+
 +#ifdef __APPLE__
 +    /* Called on drag-enter of every Nautilus drop target (views, sidebar,
 +     * path bar), synchronously before GDK deserializes the cross-app drop
@@ -3067,7 +3235,7 @@ index ac36461..2169f64 100644
 @@ -239,6 +614,51 @@ nautilus_dnd_perform_drop (NautilusFilesView *view,
  {
      g_autofree gchar *target_uri = g_file_get_uri (target_location);
- 
+
 +#ifdef __APPLE__
 +    nautilus_dnd_init_macos ();
 +
@@ -3117,7 +3285,7 @@ index ac36461..2169f64 100644
      {
          /* TODO: Implement */
 @@ -270,7 +690,14 @@ nautilus_dnd_perform_drop (NautilusFilesView *view,
- 
+
          for (GSList *l = source_file_list; l != NULL; l = l->next)
          {
 +#ifdef __APPLE__
@@ -3130,11 +3298,11 @@ index ac36461..2169f64 100644
 +#endif
          }
          source_uri_list = g_list_reverse (source_uri_list);
- 
+
 @@ -295,6 +722,15 @@ get_paintable_for_drag_selection (GList     *selection,
  {
      g_return_val_if_fail (NAUTILUS_IS_FILE (selection->data), NULL);
- 
+
 +#ifdef __APPLE__
 +    /* This runs exactly once per drag, from GtkDragSource::prepare
 +     * (on_item_drag_prepare in nautilus-list-base.c), which is the last
@@ -3161,6 +3329,49 @@ index 4ccefc1..b41f4d1 100644
 + * (de)serializers.  Idempotent; must run after gtk_init(). */
 +void               nautilus_dnd_init_macos                       (void);
 +#endif
+diff --git a/src/nautilus-fd-holder.c b/src/nautilus-fd-holder.c
+index 43aaac1..c2af794 100644
+--- a/src/nautilus-fd-holder.c
++++ b/src/nautilus-fd-holder.c
+@@ -263,11 +263,10 @@ close_if_within_mount (GFile           *mount_root,
+ }
+
+ void
+-nautilus_fd_holders_release_for_mount (GMount *mount)
++nautilus_fd_holders_release_for_location (GFile *mount_root)
+ {
+-    g_return_if_fail (G_IS_MOUNT (mount));
++    g_return_if_fail (G_IS_FILE (mount_root));
+
+-    g_autoptr (GFile) mount_root = g_mount_get_root (mount);
+     GHashTableIter iter;
+     GFile *location;
+     GFileEnumerator *enumerator;
+@@ -286,3 +285,13 @@ nautilus_fd_holders_release_for_mount (GMount *mount)
+         }
+     }
+ }
++
++void
++nautilus_fd_holders_release_for_mount (GMount *mount)
++{
++    g_return_if_fail (G_IS_MOUNT (mount));
++
++    g_autoptr (GFile) mount_root = g_mount_get_root (mount);
++
++    nautilus_fd_holders_release_for_location (mount_root);
++}
+diff --git a/src/nautilus-fd-holder.h b/src/nautilus-fd-holder.h
+index ea54998..8ecb46a 100644
+--- a/src/nautilus-fd-holder.h
++++ b/src/nautilus-fd-holder.h
+@@ -19,5 +19,6 @@ NautilusFdHolder *nautilus_fd_holder_new                (void);
+ void              nautilus_fd_holder_set_location       (NautilusFdHolder *self,
+                                                          GFile            *location);
+ void              nautilus_fd_holders_release_for_mount (GMount           *mount);
++void              nautilus_fd_holders_release_for_location (GFile         *mount_root);
+
+ G_END_DECLS
 diff --git a/src/nautilus-file-operations.c b/src/nautilus-file-operations.c
 index 005815e..55dccb1 100644
 --- a/src/nautilus-file-operations.c
@@ -3168,7 +3379,7 @@ index 005815e..55dccb1 100644
 @@ -62,6 +62,10 @@
  #include "nautilus-trash-monitor.h"
  #include "nautilus-ui-utilities.h"
- 
+
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
 +#endif
@@ -3179,7 +3390,7 @@ index 005815e..55dccb1 100644
 @@ -1645,7 +1649,18 @@ trash_file (CommonJob     *job,
          return FALSE;
      }
- 
+
 +#ifdef __APPLE__
 +    /* GIO's Unix trash backend is not the Trash Finder displays on every
 +     * macOS installation. Use the native API for local files so both this
@@ -3197,7 +3408,7 @@ index 005815e..55dccb1 100644
          nautilus_file_changes_queue_file_removed (file);
 @@ -3135,8 +3150,7 @@ verify_destination (CommonJob   *job,
      }
- 
+
      if (!job_aborted (job) &&
 -        g_file_info_get_attribute_boolean (fsinfo,
 -                                           G_FILE_ATTRIBUTE_FILESYSTEM_READONLY))
@@ -3210,13 +3421,13 @@ index eb0e9a3..fe7bba5 100644
 --- a/src/nautilus-file-private.h
 +++ b/src/nautilus-file-private.h
 @@ -25,9 +25,17 @@
- 
+
  #include "nautilus-file.h"
- 
+
 -#define NAUTILUS_FILE_DEFAULT_ATTRIBUTES				\
 +#define NAUTILUS_FILE_BASE_ATTRIBUTES				\
  	"standard::*,access::*,mountable::*,time::*,unix::*,owner::*,selinux::*,id::filesystem,trash::orig-path,trash::deletion-date,metadata::*,recent::*,preview::icon"
- 
+
 +#ifdef __APPLE__
 +/* Per-file metadata is persisted in native extended attributes on macOS
 + * (no gvfsd-metadata daemon); fetch them along with everything else. */
@@ -3242,22 +3453,22 @@ index b2f8996..db1621e 100644
 +#else
  #include <sys/vfs.h>
 +#endif
- 
+
  #define NAUTILUS_USER_DIRECTORY_NAME "nautilus"
  #define DEFAULT_NAUTILUS_DIRECTORY_MODE (0755)
 @@ -1163,13 +1168,25 @@ nautilus_location_is_autofs_mountpoint (GFile *location)
- 
+
      g_autofree char *path = g_file_get_path (location);
      struct statfs buf;
 +#ifndef __APPLE__
      gint fd;
 +#endif
- 
+
      if (path == NULL)
      {
          return FALSE;
      }
- 
+
 +#ifdef __APPLE__
 +    /* There is no O_PATH on macOS; its statfs identifies filesystems by
 +     * name instead of a magic number. */
@@ -3273,11 +3484,11 @@ index b2f8996..db1621e 100644
      {
 @@ -1185,6 +1202,7 @@ nautilus_location_is_autofs_mountpoint (GFile *location)
      close (fd);
- 
+
      return (buf.f_type == AUTOFS_SUPER_MAGIC);
 +#endif
  }
- 
+
  gboolean
 @@ -1193,3 +1211,46 @@ selection_source_is_intentional (NautilusSelectionSource selection_source)
      return selection_source == NAUTILUS_SELECTION_SOURCE_MANUAL ||
@@ -3331,9 +3542,9 @@ index f35eaf2..ce8b0e6 100644
 --- a/src/nautilus-file-utilities.h
 +++ b/src/nautilus-file-utilities.h
 @@ -147,5 +147,8 @@ nautilus_location_list_from_file_list (GList *files);
- 
+
  gboolean nautilus_location_is_autofs_mountpoint (GFile *location);
- 
+
 +gboolean nautilus_filesystem_is_readonly (GFile     *location,
 +                                          GFileInfo *filesystem_info);
 +
@@ -3346,18 +3557,18 @@ index d32b89b..95a4370 100644
 @@ -69,6 +69,10 @@
  #include <selinux/selinux.h>
  #endif
- 
+
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
 +#endif
 +
  /* Time in seconds to cache getpwuid results */
  #define GETPWUID_CACHE_TIME (5 * 60)
- 
+
 @@ -472,6 +476,54 @@ get_metadata_from_info (GFileInfo *info)
- 
+
      g_strfreev (attrs);
- 
+
 +#ifdef __APPLE__
 +    /* Per-file metadata is persisted in native extended attributes on macOS
 +     * (there is no gvfsd-metadata daemon backing the "metadata::" namespace).
@@ -3408,13 +3619,13 @@ index d32b89b..95a4370 100644
 +
      return metadata;
  }
- 
+
 @@ -480,8 +532,13 @@ nautilus_file_update_metadata_from_info (NautilusFile *file,
                                           GFileInfo    *info)
  {
      gboolean changed = FALSE;
 +    gboolean has_metadata = g_file_info_has_namespace (info, "metadata");
- 
+
 -    if (g_file_info_has_namespace (info, "metadata"))
 +#ifdef __APPLE__
 +    has_metadata = has_metadata || g_file_info_has_namespace (info, "xattr");
@@ -3423,11 +3634,11 @@ index d32b89b..95a4370 100644
 +    if (has_metadata)
      {
          GHashTable *metadata;
- 
+
 @@ -4748,6 +4805,72 @@ nautilus_file_get_thumbnail_icon (NautilusFile          *file,
      return paintable;
  }
- 
+
 +#ifdef __APPLE__
 +/* Finder-style document icons (W11): files whose themed icon would be the
 + * generic one get the LaunchServices icon of the app owning their type
@@ -3500,7 +3711,7 @@ index d32b89b..95a4370 100644
 @@ -4777,6 +4900,13 @@ nautilus_file_get_icon_paintable (NautilusFile          *file,
          paintable = nautilus_file_get_thumbnail_icon (file, size, scale, flags);
      }
- 
+
 +#ifdef __APPLE__
 +    if (paintable == NULL)
 +    {
@@ -3518,7 +3729,7 @@ index 0d6200f..f643c34 100644
 @@ -17,6 +17,27 @@ typedef gboolean (* AppendixParser) (const char *appendix,
                                       size_t     *count);
  typedef char * (* AppendixCreator) (size_t count);
- 
+
 +#ifdef __APPLE__
 +/* memrchr() is a GNU extension not available in macOS libc. */
 +static const void *
@@ -3556,12 +3767,12 @@ index 2e390ad..8e6d6e0 100644
  #include <libportal-gtk4/portal-gtk4.h>
 +#endif
  #include <nautilus-extension.h>
- 
+
  #include "nautilus-application.h"
 @@ -79,6 +81,10 @@
  #include "nautilus-view-model.h"
  #include "nautilus-window-slot.h"
- 
+
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
 +#endif
@@ -3572,7 +3783,7 @@ index 2e390ad..8e6d6e0 100644
 @@ -1423,6 +1429,7 @@ action_open_item_new_tab (GSimpleAction *action,
                                          TRUE);
  }
- 
+
 +#ifndef __APPLE__
  static void
  sandboxed_choose_program_callback (GObject      *source_object,
@@ -3582,13 +3793,13 @@ index 2e390ad..8e6d6e0 100644
                           g_steal_pointer (&files));
  }
 +#endif /* !__APPLE__ */
- 
+
  static void
  app_choosen (AdwDialog *dialog,
 @@ -1509,11 +1517,13 @@ choose_program (NautilusFilesView *view,
- 
+
      parent_window = nautilus_files_view_get_containing_window (view);
- 
+
 +#ifndef __APPLE__
      if (nautilus_application_is_sandboxed ())
      {
@@ -3596,13 +3807,13 @@ index 2e390ad..8e6d6e0 100644
          return;
      }
 +#endif
- 
+
      dialog = nautilus_app_chooser_new (files);
      g_object_set_data_full (G_OBJECT (dialog),
 @@ -1584,6 +1594,154 @@ action_open_current_directory_with_files (GSimpleAction *action,
      }
  }
- 
+
 +#ifdef __APPLE__
 +static void
 +action_show_in_finder (GSimpleAction *action,
@@ -3767,7 +3978,7 @@ index 2e390ad..8e6d6e0 100644
 @@ -2779,6 +2936,16 @@ paste_files (NautilusFilesView *view,
      clipboard = gtk_widget_get_clipboard (GTK_WIDGET (view));
      formats = gdk_clipboard_get_formats (clipboard);
- 
+
 +#ifdef __APPLE__
 +    /* Register the macOS URI-repair (de)serializers BEFORE any clipboard
 +     * read. Remote (e.g. Finder) pasteboard content advertises the
@@ -3780,7 +3991,7 @@ index 2e390ad..8e6d6e0 100644
 +
      view->selection_source = NAUTILUS_SELECTION_SOURCE_OP_START;
      real_dest_uri = dest_uri != NULL ? dest_uri : nautilus_files_view_get_backing_uri (view);
- 
+
 @@ -2811,6 +2978,23 @@ paste_files (NautilusFilesView *view,
                                          paste_value_received_callback,
                                          g_steal_pointer (&data));
@@ -3808,7 +4019,7 @@ index 2e390ad..8e6d6e0 100644
 @@ -6271,6 +6455,23 @@ action_compress (GSimpleAction *action,
      nautilus_files_view_compress_dialog_new (view);
  }
- 
+
 +#ifdef __APPLE__
 +static void
 +real_send_email (GStrv              attachments,
@@ -3834,13 +4045,13 @@ index 2e390ad..8e6d6e0 100644
                                XDP_EMAIL_FLAG_NONE, NULL, send_email_done, toplevel);
  }
 +#endif /* __APPLE__ */
- 
+
  static void
  email_archive_ready (GFile    *new_file,
 @@ -6454,6 +6656,13 @@ can_set_wallpaper (NautilusFileList *selection)
  {
      NautilusFile *file;
- 
+
 +#ifdef __APPLE__
 +    /* Setting the wallpaper needs the XDG wallpaper portal, which does not
 +     * exist on macOS. Keep the action disabled so the menu item stays
@@ -3854,7 +4065,7 @@ index 2e390ad..8e6d6e0 100644
 @@ -6470,6 +6679,7 @@ can_set_wallpaper (NautilusFileList *selection)
      return TRUE;
  }
- 
+
 +#ifndef __APPLE__
  static void
  set_wallpaper_with_portal_cb (GObject      *source,
@@ -3864,7 +4075,7 @@ index 2e390ad..8e6d6e0 100644
      xdp_parent_free (parent);
  }
 +#endif /* !__APPLE__ */
- 
+
  static void
  action_set_as_wallpaper (GSimpleAction *action,
                           GVariant      *state,
@@ -3872,15 +4083,15 @@ index 2e390ad..8e6d6e0 100644
  {
 +#ifndef __APPLE__
      g_autolist (NautilusFile) selection = NULL;
- 
+
      g_assert (NAUTILUS_IS_FILES_VIEW (user_data));
 @@ -6535,6 +6747,7 @@ action_set_as_wallpaper (GSimpleAction *action,
- 
+
          set_wallpaper_with_portal (file, user_data);
      }
 +#endif
  }
- 
+
  static void
 @@ -6880,6 +7093,18 @@ const GActionEntry view_entries[] =
          .activate = action_open_current_directory_with_other_application
@@ -3995,7 +4206,7 @@ index 2e390ad..8e6d6e0 100644
      g_simple_action_set_enabled (G_SIMPLE_ACTION (action),
 @@ -7933,6 +8243,24 @@ update_selection_menu (NautilusFilesView *self,
          }
- 
+
          g_free (item_label);
 +
 +#ifdef __APPLE__
@@ -4016,12 +4227,12 @@ index 2e390ad..8e6d6e0 100644
 +        g_object_unref (menu_item);
 +#endif
      }
- 
+
      /* The "Open" submenu should be hidden if the item doesn't open in the view. */
 @@ -8073,6 +8401,55 @@ update_selection_menu (NautilusFilesView *self,
                                           "hidden-when",
                                           !show_scripts ? "action-missing" : NULL);
- 
+
 +#ifdef __APPLE__
 +    /* Darwin-only context-menu tweaks (in C so the shared .ui stays
 +     * untouched): drop the upstream "Copy to…" item (user request; "Move
@@ -4072,12 +4283,12 @@ index 2e390ad..8e6d6e0 100644
 +#endif
 +
      const char *view_name = NAUTILUS_IS_NETWORK_VIEW (self->list_base) ? "network" : "normal";
- 
+
      /* Filter  the menus at the end to not interfere with other checks */
 @@ -8122,6 +8499,87 @@ update_background_menu (NautilusFilesView *self,
                                           "hidden-when",
                                           remove_submenu ? "action-missing" : NULL);
- 
+
 +#ifdef __APPLE__
 +    /* "Open in Terminal" (W11): darwin stand-in for GNOME's "Open in
 +     * Console" (which is permanently hidden on macOS — no org.gnome.Console
@@ -4160,7 +4371,7 @@ index 2e390ad..8e6d6e0 100644
 +#endif
 +
      const char *view_name = NAUTILUS_IS_NETWORK_VIEW (self->list_base) ? "network" : "normal";
- 
+
      /* Filter  the menus at the end to not interfere with other checks */
 diff --git a/src/nautilus-global-preferences.c b/src/nautilus-global-preferences.c
 index eaf6401..64a7152 100644
@@ -4181,7 +4392,7 @@ index eaf6401..64a7152 100644
 +#else
      localsearch_preferences = g_settings_new ("org.freedesktop.Tracker3.Miner.Files");
 +#endif
- 
+
      if (check_schema_available (FILE_SHARING_SCHEMA_ID) &&
          check_schema_available (FILE_SHARING_SERVICE_SCHEMA_ID))
 diff --git a/src/nautilus-global-preferences.h b/src/nautilus-global-preferences.h
@@ -4189,9 +4400,9 @@ index ca08bfa..f3c94e2 100644
 --- a/src/nautilus-global-preferences.h
 +++ b/src/nautilus-global-preferences.h
 @@ -46,9 +46,13 @@ G_BEGIN_DECLS
- 
+
  #define NAUTILUS_PREFERENCES_ALWAYS_USE_LOCATION_ENTRY		"always-use-location-entry"
- 
+
 +/* Custom starting folder for new windows ('' = home; macOS port addition) */
 +#define NAUTILUS_PREFERENCES_STARTING_LOCATION			"starting-location"
 +
@@ -4199,9 +4410,9 @@ index ca08bfa..f3c94e2 100644
  #define NAUTILUS_WINDOW_STATE_INITIAL_SIZE			"initial-size"
  #define NAUTILUS_WINDOW_STATE_MAXIMIZED				"maximized"
 +#define NAUTILUS_WINDOW_STATE_SIDEBAR_WIDTH			"sidebar-width"
- 
+
  #define NAUTILUS_WINDOW_STATE_INITIAL_SIZE_FILE_CHOOSER         "initial-size-file-chooser"
- 
+
 diff --git a/src/nautilus-grid-cell.c b/src/nautilus-grid-cell.c
 index f7cf26e..b40434e 100644
 --- a/src/nautilus-grid-cell.c
@@ -4209,7 +4420,7 @@ index f7cf26e..b40434e 100644
 @@ -15,6 +15,10 @@
  #include "nautilus-view-item.h"
  #include "nautilus-view-cell.h"
- 
+
 +#ifdef __APPLE__
 +#include "nautilus-list-base-private.h"
 +#endif
@@ -4223,16 +4434,16 @@ index f7cf26e..b40434e 100644
      GtkWidget *labels_box;
 +    GtkWidget *label;
      GtkWidget *caption_labels[NAUTILUS_GRID_CELL_N_CAPTIONS];
- 
+
      gboolean in_file_change;
 @@ -479,6 +484,7 @@ nautilus_grid_cell_class_init (NautilusGridCellClass *klass)
      gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, icon);
      gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, emblems_box);
      gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, labels_box);
 +    gtk_widget_class_bind_template_child (widget_class, NautilusGridCell, label);
- 
+
      gtk_widget_class_bind_template_callback (widget_class, on_label_query_tooltip);
- 
+
 @@ -514,6 +520,11 @@ nautilus_grid_cell_init (NautilusGridCell *self)
      g_object_bind_property (self, "item",
                              self->item_signal_group, "target",
@@ -4243,7 +4454,7 @@ index f7cf26e..b40434e 100644
 +    setup_cell_slow_click_rename (NAUTILUS_VIEW_CELL (self), self->label);
 +#endif
  }
- 
+
  NautilusGridCell *
 diff --git a/src/nautilus-icon-info.c b/src/nautilus-icon-info.c
 index 278efb9..630dfab 100644
@@ -4252,18 +4463,18 @@ index 278efb9..630dfab 100644
 @@ -20,8 +20,10 @@
  #include "nautilus-enums.h"
  #include <nautilus-hash-queue.h>
- 
+
 +#ifndef __APPLE__
  #include <glycin.h>
  #include <glycin-gtk4.h>
 +#endif
- 
+
  static GtkIconPaintable *
  lookup_themed_icon (GIcon *icon,
 @@ -318,6 +320,40 @@ lookup_themed_icon (GIcon *icon,
      return g_steal_pointer (&icon_paintable);
  }
- 
+
 +#ifdef __APPLE__
 +/* TRUE if looking @icon up in the current theme would land on the generic
 + * file icon ("application-x-generic") or fail outright — i.e. the theme has
@@ -4335,23 +4546,23 @@ index 278efb9..630dfab 100644
 +#else
              g_autoptr (GlyLoader) loader = gly_loader_new_for_stream (stream);
              g_autoptr (GlyImage) image = gly_loader_load (loader, NULL);
- 
+
 @@ -384,6 +448,7 @@ nautilus_icon_info_lookup (GIcon *icon,
                      paintable = gtk_snapshot_to_paintable (snapshot, NULL);
                  }
              }
 +#endif
          }
- 
+
          if (paintable == NULL)
 diff --git a/src/nautilus-icon-info.h b/src/nautilus-icon-info.h
 index f83b520..b36f4d2 100644
 --- a/src/nautilus-icon-info.h
 +++ b/src/nautilus-icon-info.h
 @@ -17,4 +17,13 @@ GdkPaintable *        nautilus_icon_info_lookup                       (GIcon
- 
+
  void                  nautilus_icon_info_clear_caches                 (void);
- 
+
 +#ifdef __APPLE__
 +/* TRUE if @icon would resolve to the generic file icon (or not resolve at
 + * all) in the current icon theme; the trigger for the darwin LaunchServices
@@ -4369,7 +4580,7 @@ index 6209de0..ec2a4db 100644
 @@ -29,4 +29,11 @@ void                          setup_cell_common                 (GObject
                                                                   NautilusViewCell *cell,
                                                                   GtkWidget        *hover_target);
- 
+
 +#ifdef __APPLE__
 +/* macOS port: Finder-style "slow second click on the name renames".
 + * Called by cell widgets (name cell, grid cell) on their name label. */
@@ -4385,14 +4596,14 @@ index 608e4fc..bc3a370 100644
 @@ -24,9 +24,20 @@
  #include <gdk/x11/gdkx.h>
  #endif
- 
+
 +#ifdef __APPLE__
 +#include <CoreFoundation/CoreFoundation.h>
 +#endif
 +
  /* 1 page worth of scroll in 100ms zooms in or out when the ctrl key is held */
  #define SCROLL_TO_ZOOM_INTERVAL 100
- 
+
 +#ifdef __APPLE__
 +/* macOS port: Finder-style slow second click on the name renames.
 + * Margin added on top of the system double-click interval before the
@@ -4404,7 +4615,7 @@ index 608e4fc..bc3a370 100644
   * NautilusListBase:
   *
 @@ -63,6 +74,15 @@ struct _NautilusListBasePrivate
- 
+
      gdouble amount_scrolled_for_zoom;
      guint scroll_timeout_id;
 +
@@ -4417,12 +4628,12 @@ index 608e4fc..bc3a370 100644
 +    NautilusViewModel *slow_rename_model; /* Owned while armed */
 +#endif
  };
- 
+
  G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (NautilusListBase, nautilus_list_base, ADW_TYPE_BIN)
 @@ -218,6 +238,287 @@ rubberband_set_state (NautilusListBase *self,
      NAUTILUS_LIST_BASE_CLASS (G_OBJECT_GET_CLASS (self))->set_enable_rubberband (self, enabled);
  }
- 
+
 +#ifdef __APPLE__
 +
 +/* === macOS port: Finder-style slow second click on the name renames ===
@@ -4710,7 +4921,7 @@ index 608e4fc..bc3a370 100644
 @@ -256,6 +557,13 @@ on_item_click_pressed (GtkGestureClick *gesture,
      GdkModifierType modifiers;
      gboolean selection_mode;
- 
+
 +#ifdef __APPLE__
 +    /* Any click cancels a pending slow-click rename trigger. (The name-label
 +     * gesture ran first — deeper widget — and may have recorded a new
@@ -4724,7 +4935,7 @@ index 608e4fc..bc3a370 100644
 @@ -359,6 +667,12 @@ on_view_click_pressed (GtkGestureClick *gesture,
      GdkModifierType modifiers;
      gboolean selection_mode;
- 
+
 +#ifdef __APPLE__
 +    /* A background click (incl. rubberband start) cancels a pending
 +     * slow-click rename trigger. */
@@ -4737,7 +4948,7 @@ index 608e4fc..bc3a370 100644
 @@ -934,6 +1248,11 @@ base_setup_directory (NautilusListBase  *self,
  {
      NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
- 
+
 +#ifdef __APPLE__
 +    /* Navigation cancels a pending slow-click rename trigger. */
 +    slow_rename_cancel (self);
@@ -4745,11 +4956,11 @@ index 608e4fc..bc3a370 100644
 +
      g_clear_object (&priv->directory_as_file);
      priv->directory_as_file = nautilus_directory_get_corresponding_file (directory);
- 
+
 @@ -1064,6 +1383,10 @@ nautilus_list_base_dispose (GObject *object)
      NautilusListBase *self = NAUTILUS_LIST_BASE (object);
      NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
- 
+
 +#ifdef __APPLE__
 +    slow_rename_cancel (self);
 +#endif
@@ -4781,7 +4992,7 @@ index 608e4fc..bc3a370 100644
 +                             G_CONNECT_SWAPPED);
 +#endif
  }
- 
+
  NautilusFile *
 diff --git a/src/nautilus-list-view.c b/src/nautilus-list-view.c
 index 4f5094b..edbd1af 100644
@@ -4789,7 +5000,7 @@ index 4f5094b..edbd1af 100644
 +++ b/src/nautilus-list-view.c
 @@ -54,6 +54,13 @@ struct _NautilusListView
      GHashTable *factory_to_column_map;
- 
+
      GtkSorter *view_model_sorter;
 +
 +    guint scroll_to_top_idle_id;
@@ -4799,12 +5010,12 @@ index 4f5094b..edbd1af 100644
 +     * "user clicked a new column" apart from "user toggled the direction". */
 +    GtkColumnViewColumn *current_sort_column;
  };
- 
+
  G_DEFINE_TYPE (NautilusListView, nautilus_list_view, NAUTILUS_TYPE_LIST_BASE)
 @@ -424,18 +431,89 @@ nautilus_list_view_present_column_editor (NautilusListView *self)
      adw_dialog_present (ADW_DIALOG (self->column_editor), GTK_WIDGET (self));
  }
- 
+
 +static gboolean
 +column_defaults_to_descending (NautilusListView    *self,
 +                               GtkColumnViewColumn *column)
@@ -4866,7 +5077,7 @@ index 4f5094b..edbd1af 100644
 +    }
 +
 +    self->current_sort_column = primary;
- 
+
      /* Notify about changes not effected by nautilus_list_base_set_sort_state(),
       * such as when the user clicks the column headers. This is important to
       * update the selected item in the sort menu, assuming this property is
@@ -4889,12 +5100,12 @@ index 4f5094b..edbd1af 100644
 +        self->scroll_to_top_idle_id = g_idle_add (scroll_to_top_on_sort_idle, self);
 +    }
  }
- 
+
  static GVariant *
 @@ -504,6 +582,11 @@ real_set_sort_state (NautilusListBase *list_base,
- 
+
      gtk_column_view_sort_by_column (self->view_ui, sort_column, reversed);
- 
+
 +    /* Keep the column tracking in sync so the next header click is
 +     * correctly classified as a toggle (same column) or a switch (new
 +     * column) by on_sorter_changed(). */
@@ -4902,11 +5113,11 @@ index 4f5094b..edbd1af 100644
 +
      g_signal_handlers_unblock_by_func (column_view_sorter, on_sorter_changed, self);
  }
- 
+
 @@ -1149,6 +1232,8 @@ nautilus_list_view_dispose (GObject *object)
      NautilusListView *self = NAUTILUS_LIST_VIEW (object);
      NautilusViewModel *model = nautilus_list_base_get_model (NAUTILUS_LIST_BASE (self));
- 
+
 +    g_clear_handle_id (&self->scroll_to_top_idle_id, g_source_remove);
 +
      if (model != NULL)
@@ -4919,7 +5130,7 @@ index d22b5d9..087fe16 100644
 @@ -34,6 +34,7 @@ static const gchar *tracker_miner_fs_busname = NULL;
  static TrackerSparqlConnection *tracker_miner_fs_connection = NULL;
  static GError *tracker_miner_fs_error = NULL;
- 
+
 +#ifndef __APPLE__
  static void
  local_tracker_miner_fs_ready (GObject      *source,
@@ -4929,11 +5140,11 @@ index d22b5d9..087fe16 100644
      }
  }
 +#endif /* !__APPLE__ */
- 
+
  void
  nautilus_localsearch_setup_miner_fs_connection (void)
 @@ -91,12 +93,22 @@ nautilus_localsearch_setup_miner_fs_connection (void)
- 
+
      if (g_once_init_enter (&tried_tracker_init))
      {
 +#ifdef __APPLE__
@@ -4946,19 +5157,19 @@ index d22b5d9..087fe16 100644
 +                             "Localsearch is not supported on macOS");
 +#else
          const gchar *busname = "org.freedesktop.Tracker3.Miner.Files";
- 
+
          g_message ("Connecting to %s", busname);
          tracker_sparql_connection_bus_new_async (busname, NULL, NULL, NULL, host_tracker_miner_fs_ready, NULL);
- 
+
          tracker_miner_fs_busname = busname;
 +#endif
- 
+
          g_once_init_leave (&tried_tracker_init, TRUE);
      }
 @@ -225,6 +237,12 @@ get_tracker_locations (const gchar *key)
      gint idx;
      GFile *location;
- 
+
 +    if (localsearch_preferences == NULL)
 +    {
 +        /* No Localsearch miner schema on this system (macOS). */
@@ -4966,7 +5177,7 @@ index d22b5d9..087fe16 100644
 +    }
 +
      locations = g_settings_get_strv (localsearch_preferences, key);
- 
+
      for (idx = 0; locations[idx] != NULL; idx++)
 diff --git a/src/nautilus-location-entry.c b/src/nautilus-location-entry.c
 index 5152091..64e62fb 100644
@@ -13598,7 +13809,7 @@ index 3ca374e..460e158 100644
 @@ -30,9 +30,15 @@
  #include "nautilus-application.h"
  #include "nautilus-resources.h"
- 
+
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
 +#endif
@@ -13608,7 +13819,7 @@ index 3ca374e..460e158 100644
 +#ifndef __APPLE__
  #include <gio/gdesktopappinfo.h>
 +#endif
- 
+
  #include <locale.h>
  #ifdef HAVE_MALLOC_H
 @@ -48,6 +54,20 @@ main (int   argc,
@@ -13639,7 +13850,7 @@ index e462298..cdb13fb 100644
 @@ -34,6 +34,31 @@ static char *used_metadata_names[] =
      NULL
  };
- 
+
 +/* Metadata keys whose value is a string list (set via
 + * nautilus_file_set_metadata_list / read via nautilus_file_get_metadata_list).
 + * Needed on macOS to decide how to (de)serialize xattr-backed metadata. */
@@ -13675,7 +13886,7 @@ index 299e3a8..38b4485 100644
 @@ -42,4 +42,20 @@
  #define NAUTILUS_METADATA_KEY_CUSTOM_ICON_NAME                	"custom-icon-name"
  #define NAUTILUS_METADATA_KEY_EMBLEMS				"emblems"
- 
+
 +#ifdef __APPLE__
 +/* On macOS there is no gvfsd-metadata daemon, so the "metadata::" GIO
 + * namespace is not writable. Instead, metadata is persisted in native
@@ -13700,13 +13911,13 @@ index 8e01f47..b98e199 100644
 @@ -14,6 +14,10 @@
  #include "nautilus-ui-utilities.h"
  #include "nautilus-view-item.h"
- 
+
 +#ifdef __APPLE__
 +#include "nautilus-list-base-private.h"
 +#endif
 +
  #define SPINNER_DELAY_MS 200
- 
+
  struct _NautilusNameCell
 @@ -32,6 +36,7 @@ struct _NautilusNameCell
      GtkWidget *spinner;
@@ -13726,7 +13937,7 @@ index 8e01f47..b98e199 100644
 +    setup_cell_slow_click_rename (NAUTILUS_VIEW_CELL (self), self->label);
 +#endif
  }
- 
+
  static void
 @@ -476,6 +486,7 @@ nautilus_name_cell_class_init (NautilusNameCellClass *klass)
      gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, spinner);
@@ -13747,13 +13958,13 @@ index de009fa..05474bc 100644
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
 +#endif
- 
+
  /* bool preferences */
  #define NAUTILUS_PREFERENCES_DIALOG_FOLDERS_FIRST_WIDGET                       \
 @@ -159,6 +162,146 @@ setup_combo (GtkBuilder  *builder,
      adw_combo_row_set_model (combo_row, G_LIST_MODEL (list_store));
  }
- 
+
 +#ifdef __APPLE__
 +
 +/* --- Starting Folder preference row (macOS port) ---------------------------
@@ -13906,7 +14117,7 @@ index de009fa..05474bc 100644
 +    setup_starting_folder_row (builder);
 +#endif
  }
- 
+
 +static AdwPreferencesDialog *preferences_dialog = NULL;
 +
 +#ifdef __APPLE__
@@ -14227,7 +14438,7 @@ index de009fa..05474bc 100644
 @@ -227,6 +683,10 @@ nautilus_preferences_dialog_show (GtkWidget *parent)
      preferences_dialog = ADW_PREFERENCES_DIALOG (gtk_builder_get_object (builder, "preferences_dialog"));
      g_object_add_weak_pointer (G_OBJECT (preferences_dialog), (gpointer *) &preferences_dialog);
- 
+
 +#ifdef __APPLE__
 +    adw_preferences_dialog_add (preferences_dialog, finder_integration_build_page ());
 +#endif
@@ -14236,7 +14447,7 @@ index de009fa..05474bc 100644
                                                   NAUTILUS_PREFERENCES_DATE_TIME_FORMAT);
      g_action_map_add_action (G_ACTION_MAP (action_group), date_time_action);
 @@ -236,3 +696,13 @@ nautilus_preferences_dialog_show (GtkWidget *parent)
- 
+
      adw_dialog_present (ADW_DIALOG (preferences_dialog), parent);
  }
 +
@@ -14254,9 +14465,9 @@ index 58731b7..1b2b059 100644
 --- a/src/nautilus-preferences-dialog.h
 +++ b/src/nautilus-preferences-dialog.h
 @@ -30,4 +30,11 @@ G_BEGIN_DECLS
- 
+
  void nautilus_preferences_dialog_show (GtkWidget *widget);
- 
+
 +#ifdef __APPLE__
 +/* Open the preferences dialog directly on the darwin-only "Finder
 + * Integration" page (opt-in, revertible integration toggles — W12). Opening
@@ -14272,7 +14483,7 @@ index cd5a439..7cd50e2 100644
 @@ -38,6 +38,151 @@
  #include <gdk/x11/gdkx.h>
  #endif
- 
+
 +#ifdef __APPLE__
 +
 +/* On macOS there is no Sushi (and usually no session bus). The previewer
@@ -14419,10 +14630,10 @@ index cd5a439..7cd50e2 100644
 +#else /* !__APPLE__ */
 +
  #define PREVIEWER2_DBUS_IFACE "org.gnome.NautilusPreviewer2"
- 
+
  static const char *previewer_dbus_name = "org.gnome.NautilusPreviewer" PROFILE;
 @@ -421,3 +566,5 @@ nautilus_previewer_is_visible (void)
- 
+
      return FALSE;
  }
 +
@@ -14439,7 +14650,7 @@ index 544bf35..1c7fbd3 100644
  #include <gio/gdesktopappinfo.h>
 +#endif
  #include <stdlib.h>
- 
+
  #include <gdk/gdk.h>
 diff --git a/src/nautilus-properties.c b/src/nautilus-properties.c
 index f9039cb..2c9eeec 100644
@@ -14458,7 +14669,7 @@ index f9039cb..2c9eeec 100644
 @@ -606,6 +608,101 @@ reset_icon (NautilusPropertiesWidget *self)
      adw_toast_overlay_add_toast (self->toast_overlay, g_steal_pointer (&toast));
  }
- 
+
 +#ifdef __APPLE__
 +static void
 +icon_loaded (GObject                  *source_object,
@@ -14562,13 +14773,13 @@ index f9039cb..2c9eeec 100644
      gly_loader_load_async (loader, self->icon_cancellable, (GAsyncReadyCallback) icon_loaded, self);
  }
 +#endif /* __APPLE__ */
- 
+
  static void
  nautilus_properties_widget_drag_drop_cb (GtkDropTarget *target,
 @@ -3882,6 +3980,12 @@ real_dispose (GObject *object)
      unschedule_or_cancel_group_change (self);
      unschedule_or_cancel_owner_change (self);
- 
+
 +    if (self->icon_cancellable != NULL)
 +    {
 +        /* Cancel before clearing so an in-flight custom-icon load can't call
@@ -14581,7 +14792,7 @@ index f9039cb..2c9eeec 100644
 @@ -3955,13 +4059,42 @@ custom_icon_file_chooser_response_cb (GtkFileDialog            *dialog,
      }
  }
- 
+
 +#ifdef __APPLE__
 +/* Replacement for gly_loader_get_mime_types(): the set of image types
 + * gdk-pixbuf can decode. */
@@ -14619,7 +14830,7 @@ index f9039cb..2c9eeec 100644
      g_auto (GStrv) mime_types = gly_loader_get_mime_types ();
 +#endif
      NautilusFile *file = get_file (self);
- 
+
      gtk_file_dialog_set_title (dialog, _("Select Custom Icon"));
 diff --git a/src/nautilus-search-engine-spotlight.c b/src/nautilus-search-engine-spotlight.c
 new file mode 100644
@@ -15075,7 +15286,7 @@ index 555b0f4..f577deb 100644
 +#endif
  #include "nautilus-search-hit.h"
  #include "nautilus-search-provider.h"
- 
+
 @@ -33,6 +36,9 @@ struct _NautilusSearchEngine
      NautilusSearchProvider *model;
      NautilusSearchProvider *recent;
@@ -15083,7 +15294,7 @@ index 555b0f4..f577deb 100644
 +#ifdef __APPLE__
 +    NautilusSearchProvider *spotlight;
 +#endif
- 
+
      GHashTable *uris;
      guint providers_started;
 @@ -92,6 +98,10 @@ search_engine_start_real (NautilusSearchEngine *self)
@@ -15096,7 +15307,7 @@ index 555b0f4..f577deb 100644
 +#endif
      search_engine_start_provider (self->simple, self);
      self->starting = FALSE;
- 
+
 @@ -146,6 +156,12 @@ nautilus_search_engine_stop (NautilusSearchEngine *self)
      {
          nautilus_search_provider_stop (self->simple);
@@ -15107,7 +15318,7 @@ index 555b0f4..f577deb 100644
 +        nautilus_search_provider_stop (self->spotlight);
 +    }
 +#endif
- 
+
      self->restart = FALSE;
  }
 @@ -278,6 +294,13 @@ nautilus_search_engine_set_search_type (NautilusSearchEngine *self,
@@ -15122,7 +15333,7 @@ index 555b0f4..f577deb 100644
 +                    (CreateFunc) nautilus_search_engine_spotlight_new);
 +#endif
  }
- 
+
  static void
 @@ -291,6 +314,9 @@ nautilus_search_engine_finalize (GObject *object)
      g_clear_object (&self->recent);
@@ -15132,16 +15343,16 @@ index 555b0f4..f577deb 100644
 +    g_clear_object (&self->spotlight);
 +#endif
      g_clear_object (&self->query);
- 
+
      G_OBJECT_CLASS (nautilus_search_engine_parent_class)->finalize (object);
 diff --git a/src/nautilus-sidebar.c b/src/nautilus-sidebar.c
-index c9bd4a6..85df823 100644
+index c9bd4a6..a3982ce 100644
 --- a/src/nautilus-sidebar.c
 +++ b/src/nautilus-sidebar.c
 @@ -39,6 +39,14 @@
  #include "nautilus-ui-utilities.h"
  #include "nautilus-window-slot.h"
- 
+
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
 +
@@ -15277,7 +15488,7 @@ index c9bd4a6..85df823 100644
 @@ -737,6 +838,7 @@ update_places (NautilusSidebar *sidebar)
          }
      }
- 
+
 +#ifndef __APPLE__
      /* Network view */
      start_icon = g_themed_icon_new_with_default_fallbacks (ICON_NAME_NETWORK_VIEW);
@@ -15290,7 +15501,7 @@ index c9bd4a6..85df823 100644
 +     * macOS; the view renders empty and mounting network:/// fails.  Hidden
 +     * here until a native (SMB/NSNetService) provider lands in Phase 3. */
 +#endif
- 
+
      /* Trash */
      if (sidebar->show_trash)
 @@ -1098,6 +1204,12 @@ update_places (NautilusSidebar *sidebar)
@@ -15307,7 +15518,7 @@ index c9bd4a6..85df823 100644
      g_list_free_full (network_volumes, g_object_unref);
      g_list_free_full (network_mounts, g_object_unref);
 @@ -1845,6 +1957,15 @@ open_row (NautilusSidebarRow *self,
- 
+
      if (uri != NULL)
      {
 +#ifdef __APPLE__
@@ -15322,7 +15533,7 @@ index c9bd4a6..85df823 100644
          g_autoptr (GFile) location = g_file_new_for_uri (uri);
          call_open_location (sidebar, location, NULL, open_flags);
      }
-@@ -2294,6 +2415,55 @@ do_unmount (GMount          *mount,
+@@ -2294,6 +2415,94 @@ do_unmount (GMount          *mount,
      }
  }
 
@@ -15334,51 +15545,90 @@ index c9bd4a6..85df823 100644
 +    return G_SOURCE_REMOVE;
 +}
 +
++typedef struct
++{
++    NautilusSidebar *sidebar;
++    NautilusSidebarRow *row;
++    char *path;
++    char *name;
++    gboolean can_eject;
++} MacosVolumeUnmountData;
++
++static void
++macos_volume_unmount_data_free (MacosVolumeUnmountData *data)
++{
++    g_clear_object (&data->sidebar);
++    g_clear_object (&data->row);
++    g_free (data->path);
++    g_free (data->name);
++    g_free (data);
++}
++
++static void
++macos_volume_prepared_cb (GObject      *source_object,
++                          GAsyncResult *result,
++                          gpointer      user_data)
++{
++    g_autoptr (GError) error = NULL;
++    g_autofree char *primary = NULL;
++    MacosVolumeUnmountData *data = user_data;
++
++    if (!nautilus_application_prepare_location_for_unmount_finish (
++            NAUTILUS_APPLICATION (source_object), result, &error) ||
++        !nautilus_macos_unmount_volume (data->path, &error))
++    {
++        primary = g_strdup_printf (data->can_eject ? _("Unable to eject “%s”")
++                                                    : _("Unable to unmount “%s”"),
++                                   data->name);
++        show_error_message (data->sidebar, primary, error->message);
++        nautilus_sidebar_row_set_busy (data->row, FALSE);
++        macos_volume_unmount_data_free (data);
++        return;
++    }
++
++    g_idle_add_full (G_PRIORITY_DEFAULT_IDLE,
++                     refresh_places_idle,
++                     g_object_ref (data->sidebar),
++                     g_object_unref);
++    macos_volume_unmount_data_free (data);
++}
++
 +static void
 +do_macos_volume_unmount (NautilusSidebarRow *row,
 +                         NautilusSidebar    *sidebar)
 +{
 +    const char *row_path = g_object_get_data (G_OBJECT (row), MACOS_VOLUME_PATH_DATA);
-+    gboolean can_eject = GPOINTER_TO_INT (
-+        g_object_get_data (G_OBJECT (row), MACOS_VOLUME_CAN_EJECT_DATA));
-+    g_autofree char *path = NULL;
-+    g_autofree char *name = NULL;
-+    g_autofree char *primary = NULL;
-+    g_autoptr (GError) error = NULL;
++    g_autoptr (GFile) mount_root = NULL;
++    MacosVolumeUnmountData *data;
 +
 +    if (row_path == NULL)
 +    {
 +        return;
 +    }
 +
-+    path = g_strdup (row_path);
-+    g_object_get (row, "label", &name, NULL);
++    data = g_new0 (MacosVolumeUnmountData, 1);
++    data->sidebar = g_object_ref (sidebar);
++    data->row = g_object_ref (row);
++    data->path = g_strdup (row_path);
++    data->can_eject = GPOINTER_TO_INT (
++        g_object_get_data (G_OBJECT (row), MACOS_VOLUME_CAN_EJECT_DATA));
++    g_object_get (row, "label", &data->name, NULL);
++
 +    nautilus_sidebar_row_set_busy (row, TRUE);
-+
-+    if (!nautilus_macos_unmount_volume (path, &error))
-+    {
-+        primary = g_strdup_printf (can_eject ? _("Unable to eject “%s”")
-+                                              : _("Unable to unmount “%s”"),
-+                                   name);
-+        show_error_message (sidebar, primary, error->message);
-+        nautilus_sidebar_row_set_busy (row, FALSE);
-+        return;
-+    }
-+
-+    /* NSWorkspace's operation is synchronous. Rebuild outside the button or
-+     * menu signal emission so destroying the old row cannot invalidate GTK's
-+     * current signal frame. */
-+    g_idle_add_full (G_PRIORITY_DEFAULT_IDLE,
-+                     refresh_places_idle,
-+                     g_object_ref (sidebar),
-+                     g_object_unref);
++    mount_root = g_file_new_for_path (data->path);
++    nautilus_application_prepare_location_for_unmount_async (
++        NAUTILUS_APPLICATION (g_application_get_default ()),
++        mount_root,
++        NULL,
++        macos_volume_prepared_cb,
++        data);
 +}
 +#endif
 +
  static void
  unmount_shortcut_cb (GSimpleAction *action,
                       GVariant      *parameter,
-@@ -2302,6 +2472,14 @@ unmount_shortcut_cb (GSimpleAction *action,
+@@ -2302,6 +2511,14 @@ unmount_shortcut_cb (GSimpleAction *action,
      NautilusSidebar *sidebar = data;
      GMount *mount;
 
@@ -15393,7 +15643,7 @@ index c9bd4a6..85df823 100644
      g_object_get (sidebar->context_row,
                    "mount", &mount,
                    NULL);
-@@ -2457,6 +2635,14 @@ eject_shortcut_cb (GSimpleAction *action,
+@@ -2457,6 +2674,14 @@ eject_shortcut_cb (GSimpleAction *action,
      GVolume *volume;
      GDrive *drive;
 
@@ -15408,7 +15658,7 @@ index c9bd4a6..85df823 100644
      g_object_get (sidebar->context_row,
                    "mount", &mount,
                    "volume", &volume,
-@@ -2489,6 +2675,16 @@ eject_or_unmount_bookmark (NautilusSidebarRow *row)
+@@ -2489,6 +2714,16 @@ eject_or_unmount_bookmark (NautilusSidebarRow *row)
      gboolean ret;
      NautilusSidebar *sidebar;
 
@@ -15425,7 +15675,7 @@ index c9bd4a6..85df823 100644
      g_object_get (row,
                    "sidebar", &sidebar,
                    "mount", &mount,
-@@ -2915,6 +3111,15 @@ create_row_popover (NautilusSidebar    *sidebar,
+@@ -2915,6 +3150,15 @@ create_row_popover (NautilusSidebar    *sidebar,
                    NULL);
 
      check_unmount_and_eject (mount, volume, drive, &show_unmount, &show_eject);
@@ -15441,7 +15691,7 @@ index c9bd4a6..85df823 100644
      if (uri != NULL)
      {
          file = g_file_new_for_uri (uri);
-@@ -3529,6 +3734,29 @@ create_volume_monitor (NautilusSidebar *sidebar)
+@@ -3529,6 +3773,29 @@ create_volume_monitor (NautilusSidebar *sidebar)
                               G_CALLBACK (update_places), sidebar, G_CONNECT_SWAPPED);
      g_signal_connect_object (sidebar->volume_monitor, "drive_changed",
                               G_CALLBACK (update_places), sidebar, G_CONNECT_SWAPPED);
@@ -15471,7 +15721,7 @@ index c9bd4a6..85df823 100644
  }
 
  static void
-@@ -3798,6 +4026,10 @@ nautilus_sidebar_dispose (GObject *object)
+@@ -3798,6 +4065,10 @@ nautilus_sidebar_dispose (GObject *object)
          g_clear_object (&sidebar->volume_monitor);
      }
 
@@ -15487,9 +15737,9 @@ index c34a17c..58e9ea6 100644
 --- a/src/nautilus-tag-manager.c
 +++ b/src/nautilus-tag-manager.c
 @@ -29,6 +29,10 @@
- 
+
  #include "config.h"
- 
+
 +#ifdef __APPLE__
 +#include <gmodule.h>
 +#endif
@@ -15500,7 +15750,7 @@ index c34a17c..58e9ea6 100644
 @@ -658,12 +662,71 @@ nautilus_tag_manager_get (void)
      return tag_manager;
  }
- 
+
 +#ifdef __APPLE__
 +#include <mach-o/dyld.h>
 +#include <limits.h>
@@ -15571,7 +15821,7 @@ index c34a17c..58e9ea6 100644
      g_autoptr (GFile) store = NULL;
 @@ -672,6 +735,21 @@ setup_database (NautilusTagManager  *self,
      /* Open private database to store nautilus:starred property. */
- 
+
      datadir = NAUTILUS_DATADIR;
 +#ifdef __APPLE__
 +    /* The compile-time datadir points into the build machine's install
@@ -15588,7 +15838,7 @@ index c34a17c..58e9ea6 100644
 +        }
 +    }
 +#endif
- 
+
      store_path = g_build_filename (g_get_user_data_dir (), "nautilus", "tags", NULL);
      ontology_path = g_build_filename (datadir, "ontology", NULL);
 diff --git a/src/nautilus-thumbnails-macos.c b/src/nautilus-thumbnails-macos.c
@@ -16158,7 +16408,7 @@ index a20b99d..b5d4bb2 100644
 @@ -62,6 +62,14 @@ struct _NautilusToolbar
      gboolean show_view_controls;
      gboolean show_history_controls;
- 
+
 +    /* macOS chrome: the main-menu hamburger and the "Search Everywhere"
 +     * toggle live in the content toolbar (Finder-style), because the
 +     * sidebar header only hosts the window controls. Off by default so
@@ -16179,7 +16429,7 @@ index a20b99d..b5d4bb2 100644
 +    PROP_APP_MENU_MODEL,
      NUM_PROPERTIES
  };
- 
+
 @@ -221,6 +232,17 @@ on_location_entry_location_changed (NautilusLocationEntry *entry,
      nautilus_window_slot_open_location_full (self->window_slot, location, NULL);
  }
@@ -16211,7 +16461,7 @@ index a20b99d..b5d4bb2 100644
 @@ -349,6 +374,24 @@ nautilus_toolbar_get_property (GObject    *object,
          }
          break;
- 
+
 +        case PROP_SHOW_APP_MENU_BUTTON:
 +        {
 +            g_value_set_boolean (value, self->show_app_menu_button);
@@ -16236,7 +16486,7 @@ index a20b99d..b5d4bb2 100644
 @@ -414,6 +457,24 @@ nautilus_toolbar_set_property (GObject      *object,
          }
          break;
- 
+
 +        case PROP_SHOW_APP_MENU_BUTTON:
 +        {
 +            self->show_app_menu_button = g_value_get_boolean (value);
@@ -16261,10 +16511,10 @@ index a20b99d..b5d4bb2 100644
 @@ -438,6 +499,7 @@ nautilus_toolbar_finalize (GObject *obj)
  {
      NautilusToolbar *self = NAUTILUS_TOOLBAR (obj);
- 
+
 +    g_clear_object (&self->app_menu_model);
      g_clear_weak_pointer (&self->focus_before_location_entry);
- 
+
      g_signal_handlers_disconnect_by_func (nautilus_preferences,
 @@ -491,6 +553,16 @@ nautilus_toolbar_class_init (NautilusToolbarClass *klass)
      properties[PROP_SHOW_VIEW_CONTROLS] =
@@ -16280,9 +16530,9 @@ index a20b99d..b5d4bb2 100644
 +        g_param_spec_object ("app-menu-model", NULL, NULL,
 +                             G_TYPE_MENU_MODEL,
 +                             G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
- 
+
      g_object_class_install_properties (oclass, NUM_PROPERTIES, properties);
- 
+
 diff --git a/src/nautilus-vfs-file.c b/src/nautilus-vfs-file.c
 index de42f6c..17d2909 100644
 --- a/src/nautilus-vfs-file.c
@@ -16293,7 +16543,7 @@ index de42f6c..17d2909 100644
  #include "nautilus-file-private.h"
 +#include "nautilus-metadata.h"
  #include <glib/gi18n.h>
- 
+
  G_DEFINE_TYPE (NautilusVFSFile, nautilus_vfs_file, NAUTILUS_TYPE_FILE);
 @@ -160,7 +161,13 @@ vfs_file_set_metadata (NautilusFile *file,
                         const char   *value)
@@ -16306,7 +16556,7 @@ index de42f6c..17d2909 100644
 +#else
      g_autofree char *gio_key = g_strconcat ("metadata::", key, NULL);
 +#endif
- 
+
      if (value != NULL)
      {
 @@ -196,6 +203,23 @@ vfs_file_set_metadata_as_list (NautilusFile  *file,
@@ -16331,14 +16581,14 @@ index de42f6c..17d2909 100644
 +    }
 +#else
      g_autofree char *gio_key = g_strconcat ("metadata::", key, NULL);
- 
+
      if (value == NULL)
 @@ -206,6 +230,7 @@ vfs_file_set_metadata_as_list (NautilusFile  *file,
      {
          g_file_info_set_attribute_stringv (info, gio_key, value);
      }
 +#endif
- 
+
      if (g_test_initialized ())
      {
 diff --git a/src/nautilus-window-slot.c b/src/nautilus-window-slot.c
@@ -16411,7 +16661,7 @@ index 5e4a928..2412896 100644
 @@ -1335,6 +1384,13 @@ nautilus_window_slot_init (NautilusWindowSlot *self)
                                      "slot",
                                      G_ACTION_GROUP (self->slot_action_group));
- 
+
 +    /* GSimpleActions are enabled by default, but there is no history to
 +     * navigate until the first location finishes loading. Sync the enabled
 +     * state now so a Back/Forward activation arriving during the initial
@@ -16420,10 +16670,10 @@ index 5e4a928..2412896 100644
 +    update_back_forward_actions (self);
 +
      self->shortcuts = GTK_SHORTCUT_CONTROLLER (gtk_shortcut_controller_new ());
- 
+
      gtk_shortcut_controller_set_scope (self->shortcuts, GTK_SHORTCUT_SCOPE_MANAGED);
 @@ -2203,8 +2259,12 @@ nautilus_window_slot_back_or_forward (NautilusWindowSlot *self,
- 
+
      if (back)
      {
 -        /* While searching, maybe the user means to go "back" to no search. */
@@ -16451,12 +16701,12 @@ index 216989d..a7c91b2 100644
  void nautilus_window_slot_restore_navigation_state (NautilusWindowSlot      *self,
                                                      NautilusNavigationState *data);
 diff --git a/src/nautilus-window.c b/src/nautilus-window.c
-index 91e5f48..d028a4a 100644
+index 91e5f48..b58f544 100644
 --- a/src/nautilus-window.c
 +++ b/src/nautilus-window.c
 @@ -103,6 +103,8 @@ struct _NautilusWindow
      GtkWidget *split_view;
- 
+
      /* Side Pane */
 +    GtkWidget *sidebar_resize_handle;
 +    int sidebar_width;
@@ -16466,7 +16716,7 @@ index 91e5f48..d028a4a 100644
 @@ -648,6 +650,99 @@ action_toggle_sidebar (GSimpleAction *action,
      adw_overlay_split_view_set_show_sidebar (ADW_OVERLAY_SPLIT_VIEW (window->split_view), !revealed);
  }
- 
+
 +/* Clamps for the user-resizable sidebar; keep in sync with the range of the
 + * "sidebar-width" key in org.gnome.nautilus.gschema.xml. */
 +#define SIDEBAR_RESIZE_MIN_WIDTH 180
@@ -16575,11 +16825,11 @@ index 91e5f48..d028a4a 100644
      nautilus_application_set_accelerator (app, "win.undo", "<control>z");
 @@ -1199,6 +1296,7 @@ nautilus_window_constructed (GObject *self)
      notify_decoration_layout_cb (window);
- 
+
      nautilus_window_set_up_sidebar (window);
 +    nautilus_window_set_up_sidebar_resize (window);
- 
- 
+
+
      g_signal_connect_object (nautilus_file_undo_manager_get (), "undo-changed",
 @@ -1276,6 +1374,9 @@ nautilus_window_save_geometry (NautilusWindow *window)
      g_settings_set_value (nautilus_window_state,
@@ -16589,9 +16839,54 @@ index 91e5f48..d028a4a 100644
 +                        NAUTILUS_WINDOW_STATE_SIDEBAR_WIDTH,
 +                        window->sidebar_width);
  }
- 
+
  void
-@@ -1669,6 +1770,7 @@ nautilus_window_class_init (NautilusWindowClass *class)
+@@ -1430,6 +1531,44 @@ nautilus_window_get_locations (NautilusWindow *self)
+     return locations;
+ }
+
++static gboolean
++location_is_within (GFile *location,
++                    GFile *root)
++{
++    return location != NULL &&
++           (g_file_equal (location, root) || g_file_has_prefix (location, root));
++}
++
++GList *
++nautilus_window_redirect_slots_from_location (NautilusWindow *self,
++                                              GFile          *source_root,
++                                              GFile          *destination)
++{
++    GList *redirected_slots = NULL;
++
++    g_return_val_if_fail (NAUTILUS_IS_WINDOW (self), NULL);
++    g_return_val_if_fail (G_IS_FILE (source_root), NULL);
++    g_return_val_if_fail (G_IS_FILE (destination), NULL);
++
++    for (GList *l = self->slots; l != NULL; l = l->next)
++    {
++        NautilusWindowSlot *slot = l->data;
++        GFile *location = nautilus_window_slot_get_location (slot);
++        GFile *pending_location = nautilus_window_slot_get_pending_location (slot);
++
++        if (!location_is_within (location, source_root) &&
++            !location_is_within (pending_location, source_root))
++        {
++            continue;
++        }
++
++        nautilus_window_slot_open_location_full (slot, destination, NULL);
++        redirected_slots = g_list_prepend (redirected_slots, g_object_ref (slot));
++    }
++
++    return g_list_reverse (redirected_slots);
++}
++
+ static void
+ on_is_maximized_changed (GObject    *object,
+                          GParamSpec *pspec,
+@@ -1669,6 +1808,7 @@ nautilus_window_class_init (NautilusWindowClass *class)
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, undo_redo_section);
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, toolbar);
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, split_view);
@@ -16599,6 +16894,26 @@ index 91e5f48..d028a4a 100644
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, places_sidebar);
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, toast_overlay);
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, tab_view);
+diff --git a/src/nautilus-window.h b/src/nautilus-window.h
+index 610ff8f..541fb2d 100644
+--- a/src/nautilus-window.h
++++ b/src/nautilus-window.h
+@@ -66,6 +66,15 @@ nautilus_window_get_active_location (NautilusWindow *self);
+ GList *
+ nautilus_window_get_locations (NautilusWindow *self);
+
++/* Redirect every tab whose current or pending location is @source_root or a
++ * descendant of it. Returns a list of referenced NautilusWindowSlot objects
++ * that were redirected; free it with g_list_free_full (slots,
++ * g_object_unref). */
++GList *
++nautilus_window_redirect_slots_from_location (NautilusWindow *self,
++                                              GFile          *source_root,
++                                              GFile          *destination);
++
+ void     nautilus_window_show_about_dialog    (NautilusWindow *window);
+
+ void nautilus_window_show_operation_notification (NautilusWindow *window,
 diff --git a/src/resources/menu/nautilus-pathbar-context-menu.ui b/src/resources/menu/nautilus-pathbar-context-menu.ui
 index b6edceb..c975cbb 100644
 --- a/src/resources/menu/nautilus-pathbar-context-menu.ui
@@ -16628,7 +16943,7 @@ index e69f5ef..1c2d8eb 100644
 @@ -86,6 +86,22 @@ template $NautilusToolbar: Adw.Bin {
        Adw.Bin history_controls_placeholder {}
      }
- 
+
 +    [end]
 +    MenuButton app_menu_button {
 +      visible: bind template.show-app-menu-button;
@@ -16660,7 +16975,7 @@ index a5e3ca9..f6ae233 100644
 +      accel: "<Meta><Shift>period";
      }
    }
- 
+
 diff --git a/src/resources/ui/nautilus-window.blp b/src/resources/ui/nautilus-window.blp
 index c336138..d0e8d5e 100644
 --- a/src/resources/ui/nautilus-window.blp
@@ -16679,10 +16994,10 @@ index c336138..d0e8d5e 100644
 +         * width (user-resizable via sidebar_resize_handle) through that
 +         * single property. */
 +        sidebar-width-fraction: 0.999;
- 
+
          sidebar: Adw.ToolbarView {
            reveal-bottom-bars: bind progress_indicator.reveal;
- 
+
 +          /* macOS chrome: the sidebar header hosts only the window controls
 +           * (Finder-style traffic lights at the top-left; the decoration
 +           * layout is set to the left side at startup on darwin). The main
@@ -16703,7 +17018,7 @@ index c336138..d0e8d5e 100644
 -              title: _("Files");
 -            };
 +            show-title: false;
- 
+
 -            [end]
 -            MenuButton {
 -              tooltip-text: _("Main Menu");
@@ -16714,12 +17029,12 @@ index c336138..d0e8d5e 100644
 +              "flat",
 +            ]
            }
- 
+
            [bottom]
 @@ -160,48 +161,63 @@ template $NautilusWindow: Adw.ApplicationWindow {
            };
          };
- 
+
 -        content: Adw.ToolbarView {
 -          [top]
 -          $NautilusToolbar toolbar {
@@ -16740,7 +17055,7 @@ index c336138..d0e8d5e 100644
 +              sidebar-button-active: bind split_view.show-sidebar bidirectional;
 +              window-slot: bind template.active-slot;
 +            }
- 
+
 -          [top]
 -          Adw.TabBar tab_bar {
 -            view: tab_view;
@@ -16749,7 +17064,7 @@ index c336138..d0e8d5e 100644
 +            Adw.TabBar tab_bar {
 +              view: tab_view;
 +            }
- 
+
 -          content: Adw.TabView tab_view {
 -            menu-model: tab_menu_model;
 -            close-page => $tab_view_close_page_cb();
@@ -16768,7 +17083,7 @@ index c336138..d0e8d5e 100644
 +              page-attached => $tab_view_page_attached_cb();
 +              page-detached => $tab_view_page_detached_cb();
 +            };
- 
+
 -          [bottom]
 -          $NautilusNetworkAddressBar network_address_bar {
 -            visible: false;
@@ -16777,14 +17092,14 @@ index c336138..d0e8d5e 100644
 +            $NautilusNetworkAddressBar network_address_bar {
 +              visible: false;
 +            }
- 
+
 -          [bottom]
 -          ActionBar action_bar {
 -            revealed: false;
 +            [bottom]
 +            ActionBar action_bar {
 +              revealed: false;
- 
+
 -            [start]
 -            $NautilusHistoryControls {
 -              window-slot: bind template.active-slot;
@@ -16793,7 +17108,7 @@ index c336138..d0e8d5e 100644
 +              $NautilusHistoryControls {
 +                window-slot: bind template.active-slot;
 +              }
- 
+
 -            [end]
 -            $NautilusViewControls {
 -              window-slot: bind template.active-slot;
@@ -16820,22 +17135,22 @@ index e439d3c..b20c105 100644
 --- a/src/resources/ui/shortcuts-dialog.blp
 +++ b/src/resources/ui/shortcuts-dialog.blp
 @@ -7,7 +7,7 @@ Adw.ShortcutsDialog shortcuts_dialog {
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Open");
 -      accelerator: "Return <Primary>O";
 +      accelerator: "Return <Meta>O";
      }
- 
+
      Adw.ShortcutsItem {
 @@ -27,7 +27,7 @@ Adw.ShortcutsDialog shortcuts_dialog {
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Open With Default App");
 -      accelerator: "<Primary>O <alt>Down";
 +      accelerator: "<Meta>O <Meta>Down";
      }
- 
+
      Adw.ShortcutsItem {
 @@ -49,24 +49,24 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
@@ -16845,27 +17160,27 @@ index e439d3c..b20c105 100644
 +      accelerator: "<Meta><Shift>N";
      }
    }
- 
+
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Cut");
 -      accelerator: "<Primary>X";
 +      accelerator: "<Meta>X";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Copy");
 -      accelerator: "<Primary>C";
 +      accelerator: "<Meta>C";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Paste");
 -      accelerator: "<Primary>V";
 +      accelerator: "<Meta>V";
      }
    }
- 
+
 @@ -80,24 +80,24 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
@@ -16873,28 +17188,28 @@ index e439d3c..b20c105 100644
 -      action-name: "win.undo";
 +      accelerator: "<Meta>Z";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Redo");
 -      action-name: "win.redo";
 +      accelerator: "<Meta><Shift>Z";
      }
    }
- 
+
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Move to Trash");
 -      accelerator: "Delete";
 +      accelerator: "<Meta>BackSpace Delete";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Delete Permanently");
 -      accelerator: "<shift>Delete";
 +      accelerator: "<Meta><Shift>BackSpace <shift>Delete";
      }
    }
- 
+
 @@ -116,14 +116,14 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
@@ -16903,7 +17218,7 @@ index e439d3c..b20c105 100644
 +      accelerator: "<Meta>I <alt>Return";
      }
    }
- 
+
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Bookmark Current Location");
@@ -16911,48 +17226,48 @@ index e439d3c..b20c105 100644
 +      accelerator: "<Meta>D";
      }
    }
- 
+
 @@ -132,34 +132,34 @@ Adw.ShortcutsDialog shortcuts_dialog {
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Zoom In");
 -      accelerator: "<Primary>plus";
 +      accelerator: "<Meta>plus";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Zoom Out");
 -      accelerator: "<Primary>minus";
 +      accelerator: "<Meta>minus";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Reset Zoom");
 -      accelerator: "<Primary>0";
 +      accelerator: "<Meta>0";
      }
    }
- 
+
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "List View");
 -      accelerator: "<Primary>1";
 +      accelerator: "<Meta>2";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Grid View");
 -      accelerator: "<Primary>2";
 +      accelerator: "<Meta>1";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Refresh View");
 -      accelerator: "F5 <Primary>R";
 +      accelerator: "F5 <Meta>R";
      }
    }
- 
+
 @@ -192,7 +192,7 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
      Adw.ShortcutsItem {
@@ -16960,25 +17275,25 @@ index e439d3c..b20c105 100644
 -      accelerator: "<Primary>H";
 +      accelerator: "<Meta><Shift>period";
      }
- 
+
      Adw.ShortcutsItem {
 @@ -206,7 +206,7 @@ Adw.ShortcutsDialog shortcuts_dialog {
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Select All");
 -      accelerator: "<Primary>A";
 +      accelerator: "<Meta>A";
      }
- 
+
      Adw.ShortcutsItem {
 @@ -249,7 +249,7 @@ Adw.ShortcutsDialog shortcuts_dialog {
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Go Up");
 -      accelerator: "<alt>Up";
 +      accelerator: "<alt>Up <Meta>Up";
      }
- 
+
      Adw.ShortcutsItem {
 @@ -266,7 +266,7 @@ Adw.ShortcutsDialog shortcuts_dialog {
    Adw.ShortcutsSection {
@@ -16987,23 +17302,23 @@ index e439d3c..b20c105 100644
 -      accelerator: "<Primary>L";
 +      accelerator: "<Meta>L <Meta><Shift>G";
      }
- 
+
      Adw.ShortcutsItem {
 @@ -285,12 +285,12 @@ Adw.ShortcutsDialog shortcuts_dialog {
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Search Everywhere");
 -      accelerator: "<Primary><Shift>F";
 +      accelerator: "<Meta><Shift>F";
      }
- 
+
      Adw.ShortcutsItem {
        title: C_("shortcuts dialog", "Search Current Folder");
 -      accelerator: "<Primary>F";
 +      accelerator: "<Meta>F";
      }
    }
- 
+
 diff --git a/test/display/meson.build b/test/display/meson.build
 index 93375e3..e7c3b99 100644
 --- a/test/display/meson.build
@@ -17030,10 +17345,10 @@ index 93375e3..e7c3b99 100644
 +endif
 diff --git a/test/display/test-macos-sidebar.c b/test/display/test-macos-sidebar.c
 new file mode 100644
-index 0000000..e61a3e2
+index 0000000..1a48df3
 --- /dev/null
 +++ b/test/display/test-macos-sidebar.c
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,180 @@
 +#define G_LOG_DOMAIN "test-macos-sidebar"
 +
 +#include <nautilus-application.h>
@@ -17043,9 +17358,12 @@ index 0000000..e61a3e2
 +#include <nautilus-resources.h>
 +#include <nautilus-sidebar.h>
 +#include <nautilus-tag-manager.h>
++#include <nautilus-window.h>
 +
 +#include <glib.h>
 +#include <gtk/gtk.h>
++
++static NautilusApplication *test_application;
 +
 +static void
 +test_sidebar_shows_mounted_volumes (void)
@@ -17071,11 +17389,124 @@ index 0000000..e61a3e2
 +    g_list_free_full (volumes, (GDestroyNotify) nautilus_macos_mounted_volume_free);
 +}
 +
++typedef struct
++{
++    GMainLoop *loop;
++    gboolean prepared;
++    GError *error;
++} PrepareResult;
++
++static void
++prepare_finished_cb (GObject      *source_object,
++                     GAsyncResult *result,
++                     gpointer      user_data)
++{
++    PrepareResult *prepare_result = user_data;
++
++    prepare_result->prepared =
++        nautilus_application_prepare_location_for_unmount_finish (
++            NAUTILUS_APPLICATION (source_object),
++            result,
++            &prepare_result->error);
++    g_main_loop_quit (prepare_result->loop);
++}
++
++static void
++assert_window_is_idle_at_home (NautilusWindow *window,
++                               guint           expected_tabs)
++{
++    g_autoptr (GFile) home = g_file_new_for_path (g_get_home_dir ());
++    GList *locations = nautilus_window_get_locations (window);
++
++    g_assert_cmpuint (g_list_length (locations), ==, expected_tabs);
++    for (GList *l = locations; l != NULL; l = l->next)
++    {
++        g_assert_true (g_file_equal (l->data, home));
++    }
++
++    g_list_free (locations);
++}
++
++static void
++test_prepare_tabs_and_eject_disposable_volume (void)
++{
++    const char *volume_path = g_getenv ("NAUTILUS_TEST_EJECT_VOLUME");
++    g_autoptr (GFile) volume_root = NULL;
++    g_autoptr (GFile) first_folder = NULL;
++    g_autoptr (GFile) second_folder = NULL;
++    g_autoptr (NautilusWindow) first_window = NULL;
++    g_autoptr (NautilusWindow) second_window = NULL;
++    g_autoptr (GError) error = NULL;
++    PrepareResult result = { 0 };
++
++    if (volume_path == NULL)
++    {
++        g_test_skip ("Set NAUTILUS_TEST_EJECT_VOLUME to a disposable mounted volume");
++        return;
++    }
++
++    g_assert_true (g_file_test (volume_path, G_FILE_TEST_IS_DIR));
++    volume_root = g_file_new_for_path (volume_path);
++    first_folder = g_file_get_child (volume_root, "first");
++    second_folder = g_file_get_child (volume_root, "second");
++    g_assert_true (g_file_make_directory (first_folder, NULL, &error));
++    g_assert_no_error (error);
++    g_assert_true (g_file_make_directory (second_folder, NULL, &error));
++    g_assert_no_error (error);
++
++    first_window = nautilus_application_create_window (test_application);
++    second_window = nautilus_application_create_window (test_application);
++    g_object_ref_sink (first_window);
++    g_object_ref_sink (second_window);
++
++    nautilus_window_open_location_full (first_window,
++                                        volume_root,
++                                        NAUTILUS_OPEN_FLAG_NORMAL,
++                                        NULL);
++    nautilus_window_open_location_full (first_window,
++                                        first_folder,
++                                        NAUTILUS_OPEN_FLAG_NEW_TAB |
++                                        NAUTILUS_OPEN_FLAG_DONT_MAKE_ACTIVE,
++                                        NULL);
++    nautilus_window_open_location_full (second_window,
++                                        second_folder,
++                                        NAUTILUS_OPEN_FLAG_NORMAL,
++                                        NULL);
++    nautilus_window_open_location_full (second_window,
++                                        volume_root,
++                                        NAUTILUS_OPEN_FLAG_NEW_TAB |
++                                        NAUTILUS_OPEN_FLAG_DONT_MAKE_ACTIVE,
++                                        NULL);
++
++    result.loop = g_main_loop_new (NULL, FALSE);
++    nautilus_application_prepare_location_for_unmount_async (
++        test_application,
++        volume_root,
++        NULL,
++        prepare_finished_cb,
++        &result);
++    g_main_loop_run (result.loop);
++    g_main_loop_unref (result.loop);
++
++    g_assert_no_error (result.error);
++    g_assert_true (result.prepared);
++    assert_window_is_idle_at_home (first_window, 2);
++    assert_window_is_idle_at_home (second_window, 2);
++
++    g_assert_true (nautilus_macos_unmount_volume (volume_path, &error));
++    g_assert_no_error (error);
++    g_assert_false (g_file_test (volume_path, G_FILE_TEST_EXISTS));
++
++    gtk_window_destroy (GTK_WINDOW (first_window));
++    gtk_window_destroy (GTK_WINDOW (second_window));
++}
++
 +int
 +main (int   argc,
 +      char *argv[])
 +{
 +    g_autoptr (NautilusTagManager) tag_manager = NULL;
++    g_autoptr (GError) error = NULL;
 +
 +    gtk_test_init (&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
 +    nautilus_register_resource ();
@@ -17084,9 +17515,17 @@ index 0000000..e61a3e2
 +    tag_manager = nautilus_tag_manager_new_dummy ();
 +
 +    g_autoptr (NautilusApplication) app = nautilus_application_new ();
++    g_application_set_flags (G_APPLICATION (app),
++                             g_application_get_flags (G_APPLICATION (app)) |
++                             G_APPLICATION_NON_UNIQUE);
++    g_assert_true (g_application_register (G_APPLICATION (app), NULL, &error));
++    g_assert_no_error (error);
++    test_application = app;
 +
 +    g_test_add_func ("/macos-sidebar/shows-mounted-volumes",
 +                     test_sidebar_shows_mounted_volumes);
++    g_test_add_func ("/macos-sidebar/prepare-tabs-and-eject-disposable-volume",
++                     test_prepare_tabs_and_eject_disposable_volume);
 +
 +    return g_test_run ();
 +}
