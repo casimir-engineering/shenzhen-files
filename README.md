@@ -19,7 +19,7 @@
 
 - **Native menu bar** — the full GNOME Files menu rendered as a real NSMenu bar (File · Edit · View · Go · Window · Help), with working key equivalents.
 - **Finder-like Dock lifecycle** — closing the last window keeps the app alive; clicking the Dock icon or pressing Cmd-T opens a new window, while Cmd-T adds a tab when a window exists.
-- **Mounted drives in the sidebar** — the startup disk, external disks, disk images, and network volumes appear under mounts with native eject or unmount controls and automatic hot-plug refresh.
+- **Mounted drives in the sidebar** — the startup disk, external disks, disk images, and network volumes appear under mounts with native eject or unmount controls and automatic hot-plug refresh. Ejecting a volume that is open in Shenzhen Files first returns every affected window and tab to Home, releases its directory handles, and then safely ejects it.
 - **QuickLook everywhere** — real macOS thumbnails in the grid, space-bar preview, and LaunchServices file-type icons for anything QuickLook can't draw.
 - **Finder-compatible clipboard** — copying in Finder and pasting in Shenzhen Files transfers the original files, including from read-only locations, instead of mistaking Finder's preview image for the file.
 - **Spotlight-backed search** — the search field streams results from Spotlight, scoped to the folder you're in; plain text entered in the location field searches there, while paths and addresses still navigate.
