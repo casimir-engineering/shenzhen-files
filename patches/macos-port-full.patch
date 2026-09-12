@@ -131,7 +131,7 @@ index 54e9687..983d6cd 100644
 +  description: 'Build for macOS: replaces glycin, gnome-desktop thumbnailing and the XDG portals with native fallbacks',
 +)
 diff --git a/src/meson.build b/src/meson.build
-index c15e6ce..3d740ec 100644
+index c15e6ce..fc8f798 100644
 --- a/src/meson.build
 +++ b/src/meson.build
 @@ -46,12 +46,6 @@ libnautilus_sources = [
@@ -166,7 +166,7 @@ index c15e6ce..3d740ec 100644
    'nautilus-thumbnails.h',
    'nautilus-toolbar.c',
    'nautilus-toolbar.h',
-@@ -289,37 +278,141 @@ libnautilus_sources = [
+@@ -289,37 +278,142 @@ libnautilus_sources = [
    'nautilus-x-content-bar.h',
  ]
  
@@ -201,6 +201,7 @@ index c15e6ce..3d740ec 100644
 +    'nautilus-macos-terminal.m',
 +    'nautilus-macos-thumbnailer.m',
 +    'nautilus-macos-trash.m',
++    'nautilus-macos-volumes.m',
 +    'nautilus-search-engine-spotlight.c',
 +  ]
 +  # nautilus-macos-updater.m is NOT in this list: it is a port of
@@ -317,15 +318,20 @@ index c15e6ce..3d740ec 100644
      nautilus_include_dirs,
      libnautilus_include_dirs
 diff --git a/src/nautilus-app-chooser-widget.c b/src/nautilus-app-chooser-widget.c
-index a45977b..bb0cb36 100644
+index a45977b..5e5020e 100644
 --- a/src/nautilus-app-chooser-widget.c
 +++ b/src/nautilus-app-chooser-widget.c
-@@ -18,6 +18,12 @@
+@@ -18,6 +18,17 @@
  #include <glib/gi18n.h>
  #include <gio/gio.h>
  
 +#ifdef __APPLE__
 +#include <gio/gosxappinfo.h>
++#include <glib/gstdio.h>
++
++#include <errno.h>
++#include <fcntl.h>
++#include <unistd.h>
 +
 +#include "nautilus-macos-bridge.h"
 +#endif
@@ -333,7 +339,583 @@ index a45977b..bb0cb36 100644
  /**
   * NautilusAppChooserWidget:
   *
-@@ -542,6 +548,47 @@ setup_listitem_cb (GtkListItemFactory *factory,
+@@ -44,8 +55,10 @@ struct _NautilusAppItem
+     GObject parent_instance;
+     GAppInfo *app_info;
+     gboolean is_default;
++    gboolean is_frequent;
+     gboolean is_recommended;
+     gboolean is_fallback;
++    guint frequent_rank;
+ };
+
+ enum
+@@ -115,15 +128,19 @@ nautilus_app_item_class_init (NautilusAppItemClass *class)
+ static NautilusAppItem *
+ nautilus_app_item_new (GAppInfo *app_info,
+                        gboolean  is_default,
++                       gboolean  is_frequent,
+                        gboolean  is_recommended,
+-                       gboolean  is_fallback)
++                       gboolean  is_fallback,
++                       guint     frequent_rank)
+ {
+     NautilusAppItem *item = g_object_new (NAUTILUS_TYPE_APP_ITEM, NULL);
+
+     item->app_info = g_object_ref (app_info);
+     item->is_default = is_default;
++    item->is_frequent = is_frequent;
+     item->is_recommended = is_recommended;
+     item->is_fallback = is_fallback;
++    item->frequent_rank = frequent_rank;
+
+     return item;
+ }
+@@ -141,7 +158,7 @@ struct _NautilusAppChooserWidget
+     GListStore *app_info_store;
+     GtkListItemFactory *header_factory;
+     GtkStringFilter *filter;
+-    GtkStringSorter *sorter;
++    GtkSorter *sorter;
+     GtkWidget *program_list;
+     GtkWidget *no_apps_label;
+     GtkWidget *no_apps;
+@@ -170,6 +187,355 @@ static guint signals[N_SIGNALS];
+
+ G_DEFINE_FINAL_TYPE (NautilusAppChooserWidget, nautilus_app_chooser_widget, GTK_TYPE_WIDGET);
+
++#ifdef __APPLE__
++#define OPEN_WITH_HISTORY_MAX_APPS 8
++#define OPEN_WITH_HISTORY_VISIBLE_APPS 4
++#define OPEN_WITH_HISTORY_MAX_TYPES 64
++#define OPEN_WITH_HISTORY_MAX_BYTES (1024 * 1024)
++
++typedef struct
++{
++    char *app_id;
++    guint count;
++    gint64 last_used;
++} MacosOpenWithHistoryEntry;
++
++static void
++macos_open_with_history_entry_free (MacosOpenWithHistoryEntry *entry)
++{
++    if (entry == NULL)
++    {
++        return;
++    }
++
++    g_free (entry->app_id);
++    g_free (entry);
++}
++
++static char *
++macos_open_with_app_id (GAppInfo *app_info)
++{
++    const char *id = g_app_info_get_id (app_info);
++
++    if (id != NULL && *id != '\0')
++    {
++        return g_strconcat ("id:", id, NULL);
++    }
++
++    if (G_IS_OSX_APP_INFO (app_info))
++    {
++        const char *bundle_url = g_osx_app_info_get_filename (G_OSX_APP_INFO (app_info));
++
++        if (bundle_url != NULL && *bundle_url != '\0')
++        {
++            return g_strconcat ("url:", bundle_url, NULL);
++        }
++    }
++
++    return NULL;
++}
++
++static char *
++macos_open_with_history_path (void)
++{
++    return g_build_filename (g_get_user_config_dir (), "nautilus",
++                             "open-with-history.ini", NULL);
++}
++
++static char *
++macos_open_with_history_group (const char *content_type)
++{
++    g_autofree char *checksum =
++        g_compute_checksum_for_string (G_CHECKSUM_SHA256, content_type, -1);
++
++    return g_strconcat ("type-", checksum, NULL);
++}
++
++static GKeyFile *
++macos_open_with_history_load (void)
++{
++    g_autofree char *path = macos_open_with_history_path ();
++    GKeyFile *key_file = g_key_file_new ();
++    GStatBuf stat_buf;
++
++    /* Ignore unexpectedly large or malformed state instead of allowing a
++     * private convenience file to consume unbounded memory. */
++    if (g_stat (path, &stat_buf) == 0 &&
++        stat_buf.st_size >= 0 && stat_buf.st_size <= OPEN_WITH_HISTORY_MAX_BYTES)
++    {
++        g_autoptr (GError) error = NULL;
++
++        if (!g_key_file_load_from_file (key_file, path, G_KEY_FILE_NONE, &error))
++        {
++            g_debug ("Ignoring invalid Open With history: %s", error->message);
++            g_key_file_unref (key_file);
++            key_file = g_key_file_new ();
++        }
++    }
++
++    return key_file;
++}
++
++static MacosOpenWithHistoryEntry *
++macos_open_with_history_entry_parse (const char *serialized)
++{
++    g_auto (GStrv) fields = g_strsplit (serialized, "|", 3);
++    char *count_end = NULL;
++    char *time_end = NULL;
++    guint64 count;
++    gint64 last_used;
++    gsize decoded_len = 0;
++    g_autofree guchar *decoded = NULL;
++
++    if (g_strv_length (fields) != 3)
++    {
++        return NULL;
++    }
++
++    errno = 0;
++    count = g_ascii_strtoull (fields[0], &count_end, 10);
++    if (errno != 0 || count_end == fields[0] || *count_end != '\0' ||
++        count == 0 || count > G_MAXUINT)
++    {
++        return NULL;
++    }
++
++    errno = 0;
++    last_used = g_ascii_strtoll (fields[1], &time_end, 10);
++    if (errno != 0 || time_end == fields[1] || *time_end != '\0' || last_used <= 0)
++    {
++        return NULL;
++    }
++
++    decoded = g_base64_decode (fields[2], &decoded_len);
++    if (decoded_len == 0 || memchr (decoded, '\0', decoded_len) != NULL)
++    {
++        return NULL;
++    }
++
++    MacosOpenWithHistoryEntry *entry = g_new0 (MacosOpenWithHistoryEntry, 1);
++    entry->app_id = g_strndup ((const char *) decoded, decoded_len);
++    entry->count = (guint) count;
++    entry->last_used = last_used;
++
++    return entry;
++}
++
++static char *
++macos_open_with_history_entry_serialize (MacosOpenWithHistoryEntry *entry)
++{
++    g_autofree char *encoded =
++        g_base64_encode ((const guchar *) entry->app_id, strlen (entry->app_id));
++
++    return g_strdup_printf ("%u|%" G_GINT64_FORMAT "|%s",
++                            entry->count, entry->last_used, encoded);
++}
++
++static gint
++macos_open_with_history_entry_compare (gconstpointer a,
++                                       gconstpointer b)
++{
++    const MacosOpenWithHistoryEntry *entry_a = *(MacosOpenWithHistoryEntry *const *) a;
++    const MacosOpenWithHistoryEntry *entry_b = *(MacosOpenWithHistoryEntry *const *) b;
++
++    if (entry_a->count != entry_b->count)
++    {
++        return entry_a->count > entry_b->count ? -1 : 1;
++    }
++
++    if (entry_a->last_used != entry_b->last_used)
++    {
++        return entry_a->last_used > entry_b->last_used ? -1 : 1;
++    }
++
++    return g_strcmp0 (entry_a->app_id, entry_b->app_id);
++}
++
++static GPtrArray *
++macos_open_with_history_entries (GKeyFile   *key_file,
++                                 const char *content_type,
++                                 const char *group)
++{
++    g_autofree char *stored_type =
++        g_key_file_get_string (key_file, group, "content-type", NULL);
++    gsize serialized_len = 0;
++    g_auto (GStrv) serialized = NULL;
++    GPtrArray *entries =
++        g_ptr_array_new_with_free_func ((GDestroyNotify) macos_open_with_history_entry_free);
++
++    if (g_strcmp0 (stored_type, content_type) != 0)
++    {
++        return entries;
++    }
++
++    serialized = g_key_file_get_string_list (key_file, group, "apps",
++                                             &serialized_len, NULL);
++    for (gsize i = 0; serialized != NULL && i < serialized_len; i++)
++    {
++        MacosOpenWithHistoryEntry *entry =
++            macos_open_with_history_entry_parse (serialized[i]);
++
++        if (entry != NULL)
++        {
++            g_ptr_array_add (entries, entry);
++        }
++    }
++
++    g_ptr_array_sort (entries, macos_open_with_history_entry_compare);
++
++    return entries;
++}
++
++static gboolean
++macos_open_with_history_save (GKeyFile *key_file)
++{
++    g_autofree char *path = macos_open_with_history_path ();
++    g_autofree char *directory = g_path_get_dirname (path);
++    g_autofree char *temporary = g_strconcat (path, ".XXXXXX", NULL);
++    gsize data_len = 0;
++    g_autofree char *data = g_key_file_to_data (key_file, &data_len, NULL);
++    int fd;
++    int saved_errno = 0;
++    gsize written = 0;
++    gboolean success = FALSE;
++
++    if (g_mkdir_with_parents (directory, 0700) != 0)
++    {
++        g_warning ("Could not create private Open With history directory: %s",
++                   g_strerror (errno));
++        return FALSE;
++    }
++
++    fd = g_mkstemp_full (temporary, O_RDWR | O_CLOEXEC, 0600);
++    if (fd < 0)
++    {
++        g_warning ("Could not create Open With history: %s", g_strerror (errno));
++        return FALSE;
++    }
++
++    while (written < data_len)
++    {
++        ssize_t result = write (fd, data + written, data_len - written);
++
++        if (result < 0 && errno == EINTR)
++        {
++            continue;
++        }
++        if (result <= 0)
++        {
++            saved_errno = result < 0 ? errno : EIO;
++            break;
++        }
++
++        written += (gsize) result;
++    }
++
++    if (written == data_len && fsync (fd) != 0)
++    {
++        saved_errno = errno;
++    }
++
++    if (close (fd) != 0 && saved_errno == 0)
++    {
++        saved_errno = errno;
++    }
++    fd = -1;
++
++    if (saved_errno == 0 && g_rename (temporary, path) == 0)
++    {
++        success = TRUE;
++    }
++    else if (saved_errno == 0)
++    {
++        saved_errno = errno;
++    }
++
++    if (!success)
++    {
++        g_unlink (temporary);
++        g_warning ("Could not save Open With history: %s", g_strerror (saved_errno));
++    }
++
++    return success;
++}
++
++static void
++macos_open_with_history_prune_types (GKeyFile   *key_file,
++                                     const char *current_group)
++{
++    gsize group_count = 0;
++    g_auto (GStrv) groups = g_key_file_get_groups (key_file, &group_count);
++
++    while (group_count > OPEN_WITH_HISTORY_MAX_TYPES)
++    {
++        gsize oldest_index = G_MAXSIZE;
++        gint64 oldest_time = G_MAXINT64;
++
++        for (gsize i = 0; i < group_count; i++)
++        {
++            gint64 updated;
++
++            if (g_strcmp0 (groups[i], current_group) == 0)
++            {
++                continue;
++            }
++
++            updated = g_key_file_get_int64 (key_file, groups[i], "updated", NULL);
++            if (oldest_index == G_MAXSIZE || updated < oldest_time)
++            {
++                oldest_index = i;
++                oldest_time = updated;
++            }
++        }
++
++        if (oldest_index == G_MAXSIZE)
++        {
++            break;
++        }
++
++        g_key_file_remove_group (key_file, groups[oldest_index], NULL);
++        g_free (groups[oldest_index]);
++        groups[oldest_index] = groups[group_count - 1];
++        groups[group_count - 1] = NULL;
++        group_count--;
++    }
++}
++
++static GPtrArray *
++macos_open_with_history_ids (const char *content_type)
++{
++    g_autoptr (GKeyFile) key_file = macos_open_with_history_load ();
++    g_autofree char *group = macos_open_with_history_group (content_type);
++    g_autoptr (GPtrArray) entries =
++        macos_open_with_history_entries (key_file, content_type, group);
++    GPtrArray *ids = g_ptr_array_new_with_free_func (g_free);
++
++    for (guint i = 0; i < entries->len; i++)
++    {
++        MacosOpenWithHistoryEntry *entry = g_ptr_array_index (entries, i);
++
++        g_ptr_array_add (ids, g_strdup (entry->app_id));
++    }
++
++    return ids;
++}
++#endif
++
++static gboolean
++app_info_is_in_list (GList    *applications,
++                     GAppInfo *app)
++{
++    for (GList *l = applications; l != NULL; l = l->next)
++    {
++        if (g_app_info_equal (l->data, app))
++        {
++            return TRUE;
++        }
++    }
++
++    return FALSE;
++}
++
+ static gboolean
+ nautilus_app_chooser_widget_add_section (NautilusAppChooserWidget *self,
+                                          gboolean                  recommended,
+@@ -190,12 +556,13 @@ nautilus_app_chooser_widget_add_section (NautilusAppChooserWidget *self,
+             continue;
+         }
+
+-        if (g_list_find (exclude_apps, app))
++        if (app_info_is_in_list (exclude_apps, app))
+         {
+             continue;
+         }
+
+-        g_autoptr (NautilusAppItem) item = nautilus_app_item_new (app, FALSE, recommended, fallback);
++        g_autoptr (NautilusAppItem) item =
++            nautilus_app_item_new (app, FALSE, FALSE, recommended, fallback, 0);
+
+         g_list_store_append (self->app_info_store, item);
+         retval = TRUE;
+@@ -208,11 +575,69 @@ static void
+ nautilus_app_chooser_widget_add_default (NautilusAppChooserWidget *self,
+                                          GAppInfo                 *app)
+ {
+-    g_autoptr (NautilusAppItem) item = nautilus_app_item_new (app, TRUE, FALSE, FALSE);
++    g_autoptr (NautilusAppItem) item =
++        nautilus_app_item_new (app, TRUE, FALSE, FALSE, FALSE, 0);
+
+     g_list_store_append (self->app_info_store, item);
+ }
+
++#ifdef __APPLE__
++static GAppInfo *
++macos_find_app_by_history_id (const char *history_id,
++                              GAppInfo   *default_app,
++                              GList      *recommended_apps,
++                              GList      *fallback_apps,
++                              GList      *all_applications)
++{
++    GList *lists[] = { recommended_apps, fallback_apps, all_applications };
++
++    if (default_app != NULL)
++    {
++        g_autofree char *app_id = macos_open_with_app_id (default_app);
++
++        if (g_strcmp0 (history_id, app_id) == 0)
++        {
++            return default_app;
++        }
++    }
++
++    for (guint i = 0; i < G_N_ELEMENTS (lists); i++)
++    {
++        for (GList *l = lists[i]; l != NULL; l = l->next)
++        {
++            GAppInfo *app = l->data;
++            g_autofree char *app_id = macos_open_with_app_id (app);
++
++            if (g_strcmp0 (history_id, app_id) == 0)
++            {
++                return app;
++            }
++        }
++    }
++
++    return NULL;
++}
++
++static gboolean
++nautilus_app_chooser_widget_add_frequent (NautilusAppChooserWidget *self,
++                                          GAppInfo                 *app,
++                                          guint                     rank)
++{
++    g_autoptr (NautilusAppItem) item = NULL;
++
++    if (app == NULL ||
++        (!g_app_info_supports_uris (app) && !g_app_info_supports_files (app)))
++    {
++        return FALSE;
++    }
++
++    item = nautilus_app_item_new (app, FALSE, TRUE, FALSE, FALSE, rank);
++    g_list_store_append (self->app_info_store, item);
++
++    return TRUE;
++}
++#endif
++
+ static void
+ update_no_applications_label (NautilusAppChooserWidget *self)
+ {
+@@ -251,23 +676,61 @@ nautilus_app_chooser_widget_real_add_items (NautilusAppChooserWidget *self)
+     if (self->content_type)
+     {
+         default_app = g_app_info_get_default_for_type (self->content_type, FALSE);
+-
+-        if (default_app != NULL)
+-        {
+-            nautilus_app_chooser_widget_add_default (self, default_app);
+-            apps_added = TRUE;
+-            exclude_apps = g_list_prepend (exclude_apps, default_app);
+-        }
+     }
+
+ #ifndef G_OS_WIN32
+     if (self->content_type)
+     {
+-        if (self->content_type)
++        recommended_apps = g_app_info_get_recommended_for_type (self->content_type);
++        fallback_apps = g_app_info_get_fallback_for_type (self->content_type);
++    }
++#endif
++
++    all_applications = g_app_info_get_all ();
++
++    if (default_app != NULL)
++    {
++        nautilus_app_chooser_widget_add_default (self, default_app);
++        apps_added = TRUE;
++        exclude_apps = g_list_prepend (exclude_apps, default_app);
++    }
++
++#ifdef __APPLE__
++    if (self->content_type != NULL)
++    {
++        g_autoptr (GPtrArray) frequent_ids =
++            macos_open_with_history_ids (self->content_type);
++        guint frequent_added = 0;
++
++        for (guint i = 0;
++             i < frequent_ids->len &&
++             frequent_added < OPEN_WITH_HISTORY_VISIBLE_APPS;
++             i++)
+         {
+-            recommended_apps = g_app_info_get_recommended_for_type (self->content_type);
++            const char *history_id = g_ptr_array_index (frequent_ids, i);
++            GAppInfo *app =
++                macos_find_app_by_history_id (history_id, default_app,
++                                              recommended_apps, fallback_apps,
++                                              all_applications);
++
++            if (app == NULL || app_info_is_in_list (exclude_apps, app))
++            {
++                continue;
++            }
++
++            if (nautilus_app_chooser_widget_add_frequent (self, app, frequent_added))
++            {
++                apps_added = TRUE;
++                exclude_apps = g_list_prepend (exclude_apps, app);
++                frequent_added++;
++            }
+         }
++    }
++#endif
+
++#ifndef G_OS_WIN32
++    if (self->content_type)
++    {
+         apps_added |= nautilus_app_chooser_widget_add_section (self,
+                                                                TRUE, /* mark as recommended */
+                                                                FALSE, /* mark as fallback */
+@@ -279,11 +742,6 @@ nautilus_app_chooser_widget_real_add_items (NautilusAppChooserWidget *self)
+
+     if (self->content_type)
+     {
+-        if (self->content_type)
+-        {
+-            fallback_apps = g_app_info_get_fallback_for_type (self->content_type);
+-        }
+-
+         apps_added |= nautilus_app_chooser_widget_add_section (self,
+                                                                FALSE, /* mark as recommended */
+                                                                TRUE, /* mark as fallback */
+@@ -293,8 +751,6 @@ nautilus_app_chooser_widget_real_add_items (NautilusAppChooserWidget *self)
+     }
+ #endif
+
+-    all_applications = g_app_info_get_all ();
+-
+     apps_added |= nautilus_app_chooser_widget_add_section (self,
+                                                            FALSE,
+                                                            FALSE,
+@@ -542,6 +998,47 @@ setup_listitem_cb (GtkListItemFactory *factory,
      gtk_list_item_set_child (list_item, box);
  }
  
@@ -381,7 +963,7 @@ index a45977b..bb0cb36 100644
  static void
  bind_listitem_cb (GtkListItemFactory *factory,
                    GtkListItem        *list_item)
-@@ -550,7 +597,18 @@ bind_listitem_cb (GtkListItemFactory *factory,
+@@ -550,7 +1047,18 @@ bind_listitem_cb (GtkListItemFactory *factory,
      GtkWidget *label = gtk_widget_get_next_sibling (image);
      NautilusAppItem *app_item = gtk_list_item_get_item (list_item);
  
@@ -401,11 +983,228 @@ index a45977b..bb0cb36 100644
      gtk_label_set_label (GTK_LABEL (label), g_app_info_get_display_name (app_item->app_info));
      gtk_list_item_set_accessible_label (list_item, g_app_info_get_display_name (app_item->app_info));
  }
+@@ -584,6 +1092,10 @@ bind_header_cb (GtkListItemFactory *factory,
+     {
+         gtk_label_set_label (GTK_LABEL (label), _("Default App"));
+     }
++    else if (app_item->is_frequent)
++    {
++        gtk_label_set_label (GTK_LABEL (label), _("Frequently Used"));
++    }
+     else if (app_item->is_recommended)
+     {
+         gtk_label_set_label (GTK_LABEL (label), _("Recommended Apps"));
+@@ -639,32 +1151,47 @@ compare_section (gconstpointer a,
+ {
+     const NautilusAppItem *item1 = a;
+     const NautilusAppItem *item2 = b;
+-
+-    if (item1->is_default && !item2->is_default)
++    int section1;
++    int section2;
++
++    section1 = item1->is_default ? 0 :
++               item1->is_frequent ? 1 :
++               item1->is_recommended ? 2 :
++               item1->is_fallback ? 3 : 4;
++    section2 = item2->is_default ? 0 :
++               item2->is_frequent ? 1 :
++               item2->is_recommended ? 2 :
++               item2->is_fallback ? 3 : 4;
++
++    if (section1 < section2)
+     {
+         return -1;
+     }
+-    else if (!item1->is_default && item2->is_default)
++    if (section1 > section2)
+     {
+         return 1;
+     }
+
+-    if (item1->is_recommended && !item2->is_recommended)
+-    {
+-        return -1;
+-    }
+-    else if (!item1->is_recommended && item2->is_recommended)
+-    {
+-        return 1;
+-    }
++    return 0;
++}
++
++static int
++compare_sort_order (gconstpointer a,
++                    gconstpointer b,
++                    gpointer      data)
++{
++    const NautilusAppItem *item1 = a;
++    const NautilusAppItem *item2 = b;
++    int section_order = compare_section (a, b, data);
+
+-    if (item1->is_fallback && !item2->is_fallback)
++    if (section_order != 0)
+     {
+-        return 1;
++        return section_order;
+     }
+-    else if (!item1->is_fallback && item2->is_fallback)
++
++    if (item1->is_frequent && item1->frequent_rank != item2->frequent_rank)
+     {
+-        return -1;
++        return item1->frequent_rank < item2->frequent_rank ? -1 : 1;
+     }
+
+     return 0;
+@@ -679,12 +1206,20 @@ nautilus_app_chooser_widget_init (NautilusAppChooserWidget *self)
+     GtkFilterListModel *filter;
+     GtkSortListModel *sort;
+     GtkCustomSorter *section_sorter;
++    GtkMultiSorter *multi_sorter;
++    GtkCustomSorter *order_sorter;
++    GtkStringSorter *name_sorter;
+
+     gtk_widget_init_template (GTK_WIDGET (self));
+
+     expression = gtk_property_expression_new (NAUTILUS_TYPE_APP_ITEM, NULL, "name");
+     self->filter = gtk_string_filter_new (gtk_expression_ref (expression));
+-    self->sorter = gtk_string_sorter_new (expression);
++    multi_sorter = gtk_multi_sorter_new ();
++    order_sorter = gtk_custom_sorter_new (compare_sort_order, NULL, NULL);
++    name_sorter = gtk_string_sorter_new (expression);
++    gtk_multi_sorter_append (multi_sorter, GTK_SORTER (order_sorter));
++    gtk_multi_sorter_append (multi_sorter, GTK_SORTER (name_sorter));
++    self->sorter = GTK_SORTER (multi_sorter);
+
+     self->app_info_store = g_list_store_new (NAUTILUS_TYPE_APP_ITEM);
+     filter = gtk_filter_list_model_new (G_LIST_MODEL (g_object_ref (self->app_info_store)), GTK_FILTER (g_object_ref (self->filter)));
+@@ -735,6 +1270,83 @@ nautilus_app_chooser_widget_get_app_info (NautilusAppChooserWidget *self)
+     return g_object_ref (self->selected_app_info);
+ }
+
++void
++nautilus_app_chooser_widget_record_app (NautilusAppChooserWidget *self,
++                                        GAppInfo                 *app_info)
++{
++    g_return_if_fail (NAUTILUS_IS_APP_CHOOSER_WIDGET (self));
++    g_return_if_fail (G_IS_APP_INFO (app_info));
++
++#ifdef __APPLE__
++    if (self->content_type != NULL && *self->content_type != '\0')
++    {
++        g_autofree char *app_id = macos_open_with_app_id (app_info);
++        g_autoptr (GKeyFile) key_file = NULL;
++        g_autofree char *group = NULL;
++        g_autoptr (GPtrArray) entries = NULL;
++        g_autoptr (GPtrArray) serialized = NULL;
++        MacosOpenWithHistoryEntry *selected_entry = NULL;
++        gint64 now = g_get_real_time ();
++
++        if (app_id == NULL)
++        {
++            return;
++        }
++
++        key_file = macos_open_with_history_load ();
++        group = macos_open_with_history_group (self->content_type);
++        entries = macos_open_with_history_entries (key_file, self->content_type, group);
++
++        for (guint i = 0; i < entries->len; i++)
++        {
++            MacosOpenWithHistoryEntry *entry = g_ptr_array_index (entries, i);
++
++            if (g_strcmp0 (entry->app_id, app_id) == 0)
++            {
++                selected_entry = entry;
++                break;
++            }
++        }
++
++        if (selected_entry == NULL)
++        {
++            selected_entry = g_new0 (MacosOpenWithHistoryEntry, 1);
++            selected_entry->app_id = g_strdup (app_id);
++            selected_entry->count = 1;
++            g_ptr_array_add (entries, selected_entry);
++        }
++        else if (selected_entry->count < G_MAXUINT)
++        {
++            selected_entry->count++;
++        }
++        selected_entry->last_used = now;
++
++        g_ptr_array_sort (entries, macos_open_with_history_entry_compare);
++        while (entries->len > OPEN_WITH_HISTORY_MAX_APPS)
++        {
++            g_ptr_array_remove_index (entries, entries->len - 1);
++        }
++
++        serialized = g_ptr_array_new_with_free_func (g_free);
++        for (guint i = 0; i < entries->len; i++)
++        {
++            MacosOpenWithHistoryEntry *entry = g_ptr_array_index (entries, i);
++
++            g_ptr_array_add (serialized,
++                             macos_open_with_history_entry_serialize (entry));
++        }
++
++        g_key_file_set_string (key_file, group, "content-type", self->content_type);
++        g_key_file_set_int64 (key_file, group, "updated", now);
++        g_key_file_set_string_list (key_file, group, "apps",
++                                    (const char *const *) serialized->pdata,
++                                    serialized->len);
++        macos_open_with_history_prune_types (key_file, group);
++        macos_open_with_history_save (key_file);
++    }
++#endif
++}
++
+ void
+ nautilus_app_chooser_widget_refresh (NautilusAppChooserWidget *self)
+ {
+diff --git a/src/nautilus-app-chooser-widget.h b/src/nautilus-app-chooser-widget.h
+index cf9623c..8d0bdb9 100644
+--- a/src/nautilus-app-chooser-widget.h
++++ b/src/nautilus-app-chooser-widget.h
+@@ -28,7 +28,11 @@ void          nautilus_app_chooser_widget_set_search_entry     (NautilusAppChoos
+                                                                 GtkEditable         *editable);
+
+ GAppInfo *    nautilus_app_chooser_widget_get_app_info (NautilusAppChooserWidget *self);
++
++/* Record that @app_info was explicitly chosen for this widget's content type.
++ * On macOS this powers the bounded, per-type "Frequently Used" section. */
++void          nautilus_app_chooser_widget_record_app   (NautilusAppChooserWidget *self,
++                                                        GAppInfo                 *app_info);
+ void          nautilus_app_chooser_widget_refresh (NautilusAppChooserWidget *self);
+
+ G_END_DECLS
+-
 diff --git a/src/nautilus-app-chooser.c b/src/nautilus-app-chooser.c
-index 0abe9f1..f037c91 100644
+index 0abe9f1..a8864c4 100644
 --- a/src/nautilus-app-chooser.c
 +++ b/src/nautilus-app-chooser.c
-@@ -237,6 +237,12 @@ nautilus_app_chooser_constructed (GObject *object)
+@@ -59,6 +59,11 @@ open_cb (NautilusAppChooser *self)
+
+     info = nautilus_app_chooser_get_app_info (self);
+
++    if (info == NULL)
++    {
++        return;
++    }
++
+     if (self->single_content_type)
+     {
+         /* The switch is insensitive if the selected app is already default */
+@@ -88,6 +93,7 @@ open_cb (NautilusAppChooser *self)
+         }
+     }
+
++    nautilus_app_chooser_widget_record_app (self->app_chooser_widget, info);
+     g_signal_emit (self, signals[SIGNAL_APP_SELECTED], 0, info);
+ }
+
+@@ -237,6 +243,12 @@ nautilus_app_chooser_constructed (GObject *object)
  
      adw_dialog_set_title (ADW_DIALOG (self), title);
  
@@ -418,7 +1217,7 @@ index 0abe9f1..f037c91 100644
      if (self->single_content_type && !content_type_is_folder (self))
      {
          g_autofree gchar *type_description = g_content_type_get_description (self->content_type);
-@@ -246,6 +252,7 @@ nautilus_app_chooser_constructed (GObject *object)
+@@ -246,6 +258,7 @@ nautilus_app_chooser_constructed (GObject *object)
      {
          gtk_widget_set_visible (self->set_default_list_box, FALSE);
      }
@@ -427,7 +1226,7 @@ index 0abe9f1..f037c91 100644
  
  static void
 diff --git a/src/nautilus-application.c b/src/nautilus-application.c
-index 397cbf3..90e46d0 100644
+index 397cbf3..0be4de1 100644
 --- a/src/nautilus-application.c
 +++ b/src/nautilus-application.c
 @@ -35,9 +35,12 @@
@@ -633,7 +1432,49 @@ index 397cbf3..90e46d0 100644
                                               NAUTILUS_OPEN_FLAG_NEW_WINDOW,
                                               NULL, NULL);
  }
-@@ -606,6 +730,49 @@ action_help (GSimpleAction *action,
+@@ -547,6 +671,41 @@ action_clone_window (GSimpleAction *action,
+                                              NAUTILUS_OPEN_FLAG_NEW_WINDOW, NULL, NULL);
+ }
+
++#ifdef __APPLE__
++/* The native File menu remains available after the last window is closed,
++ * but a win.* action does not: there is no window action group left to
++ * resolve it. Keep Cmd-T application-scoped on macOS, opening a tab when a
++ * browser window exists and restoring a browser window otherwise. */
++static void
++action_new_tab (GSimpleAction *action,
++                GVariant      *parameter,
++                gpointer       user_data)
++{
++    NautilusApplication *self = NAUTILUS_APPLICATION (user_data);
++    GtkWindow *active_window = gtk_application_get_active_window (GTK_APPLICATION (self));
++    NautilusWindow *window = NULL;
++
++    if (NAUTILUS_IS_WINDOW (active_window))
++    {
++        window = NAUTILUS_WINDOW (active_window);
++    }
++    else if (self->windows != NULL)
++    {
++        window = NAUTILUS_WINDOW (self->windows->data);
++    }
++
++    if (window != NULL)
++    {
++        nautilus_window_new_tab (window);
++        gtk_window_present (GTK_WINDOW (window));
++    }
++    else
++    {
++        action_new_window (action, parameter, self);
++    }
++}
++#endif
++
+ static void
+ action_preferences (GSimpleAction *action,
+                     GVariant      *parameter,
+@@ -606,6 +765,49 @@ action_help (GSimpleAction *action,
      }
  }
  
@@ -683,7 +1524,7 @@ index 397cbf3..90e46d0 100644
  static void
  action_kill (GSimpleAction *action,
               GVariant      *parameter,
-@@ -625,6 +792,17 @@ action_quit (GSimpleAction *action,
+@@ -625,6 +827,17 @@ action_quit (GSimpleAction *action,
      NautilusApplication *self = NAUTILUS_APPLICATION (user_data);
      GList *windows, *l;
  
@@ -701,7 +1542,7 @@ index 397cbf3..90e46d0 100644
      windows = nautilus_application_get_windows (self);
      /* make a copy, since the original list will be modified when destroying
       * a window, making this list invalid */
-@@ -637,6 +815,34 @@ action_quit (GSimpleAction *action,
+@@ -637,10 +850,41 @@ action_quit (GSimpleAction *action,
      g_list_free (windows);
  }
  
@@ -736,7 +1577,24 @@ index 397cbf3..90e46d0 100644
  static const GActionEntry app_entries[] =
  {
      { .name = "new-window", .activate = action_new_window },
-@@ -665,6 +871,27 @@ nautilus_init_application_actions (NautilusApplication *app)
+     { .name = "clone-window", .activate = action_clone_window },
++#ifdef __APPLE__
++    { .name = "new-tab", .activate = action_new_tab },
++#endif
+     { .name = "preferences", .activate = action_preferences },
+     { .name = "search-settings", .activate = action_search_settings },
+     { .name = "about", .activate = action_about },
+@@ -659,12 +903,37 @@ nautilus_init_application_actions (NautilusApplication *app)
+
+     nautilus_application_set_accelerator (G_APPLICATION (app),
+                                           "app.clone-window", "<Primary>n");
++#ifdef __APPLE__
++    nautilus_application_set_accelerator (G_APPLICATION (app),
++                                          "app.new-tab", "<Primary>t");
++#endif
+     nautilus_application_set_accelerator (G_APPLICATION (app),
+                                           "app.help", "F1");
+     nautilus_application_set_accelerator (G_APPLICATION (app),
                                            "app.quit", "<Primary>q");
      nautilus_application_set_accelerator (G_APPLICATION (app),
                                            "app.preferences", "<Primary>comma");
@@ -764,7 +1622,7 @@ index 397cbf3..90e46d0 100644
  }
  
  static void
-@@ -680,7 +907,7 @@ nautilus_application_activate (GApplication *app)
+@@ -680,7 +949,7 @@ nautilus_application_activate (GApplication *app)
      }
  
      files = g_malloc0 (2 * sizeof (GFile *));
@@ -773,7 +1631,7 @@ index 397cbf3..90e46d0 100644
      nautilus_application_open (app, files, 1, NULL);
  
      g_object_unref (files[0]);
-@@ -736,7 +963,7 @@ nautilus_application_handle_file_args (NautilusApplication *self,
+@@ -736,7 +1005,7 @@ nautilus_application_handle_file_args (NautilusApplication *self,
      }
      else if (g_variant_dict_contains (options, "new-window"))
      {
@@ -782,7 +1640,7 @@ index 397cbf3..90e46d0 100644
          g_ptr_array_add (file_array, file);
      }
      else
-@@ -994,11 +1221,624 @@ nautilus_application_identify_to_portal (GApplication *app)
+@@ -994,11 +1263,624 @@ nautilus_application_identify_to_portal (GApplication *app)
                              NULL, NULL, NULL);
  }
  
@@ -855,14 +1713,14 @@ index 397cbf3..90e46d0 100644
 +    g_autoptr (GMenu) search_section = g_menu_new ();
 +    g_autoptr (GMenu) close_section = g_menu_new ();
 +
-+    /* app.clone-window displays Cmd-N automatically via its remapped
-+     * application accelerator (registered before the menubar is built).
++    /* Application actions display Cmd-N / Cmd-T automatically via their
++     * remapped accelerators (registered before the menubar is built).
 +     * The win.* accelerators are registered when the first window is
 +     * created — after the NSMenu items exist and too late for the quartz
 +     * backend to pick up — so those items carry explicit accel attributes
 +     * matching the remapped registrations. */
 +    macos_menu_append (new_section, _("New Window"), "app.clone-window", NULL);
-+    macos_menu_append (new_section, _("New Tab"), "win.new-tab", "<Meta>t");
++    macos_menu_append (new_section, _("New Tab"), "app.new-tab", NULL);
 +    macos_menu_append (new_section, _("New Folder"), "view.new-folder", "<Meta><Shift>n");
 +
 +    macos_menu_append (open_section, _("Open"), "view.open-with-default-application", "<Meta>o");
@@ -1407,7 +2265,7 @@ index 397cbf3..90e46d0 100644
      g_application_set_resource_base_path (G_APPLICATION (self), "/org/gnome/nautilus");
  
      /* Register the app with the host app registry in XDG Desktop Portal before
-@@ -1011,6 +1851,7 @@ nautilus_application_startup (GApplication *app)
+@@ -1011,6 +1893,7 @@ nautilus_application_startup (GApplication *app)
          nautilus_application_identify_to_portal (app);
      }
  
@@ -1415,7 +2273,7 @@ index 397cbf3..90e46d0 100644
      /* Initialize GDK display (for wayland-x11-interop protocol) before GTK does
       * it during the chain-up. */
      g_autoptr (GError) error = NULL;
-@@ -1027,6 +1868,7 @@ nautilus_application_startup (GApplication *app)
+@@ -1027,6 +1910,7 @@ nautilus_application_startup (GApplication *app)
          g_message ("Failed to initialize display server connection: %s",
                     error->message);
      }
@@ -1423,7 +2281,7 @@ index 397cbf3..90e46d0 100644
  
      /* Chain up to the GtkApplication implementation early, so that gtk_init()
       * is called for us.
-@@ -1057,6 +1899,65 @@ nautilus_application_startup (GApplication *app)
+@@ -1057,6 +1941,65 @@ nautilus_application_startup (GApplication *app)
  
      nautilus_init_application_actions (self);
  
@@ -1489,7 +2347,7 @@ index 397cbf3..90e46d0 100644
      if (!g_test_initialized ())
      {
          maybe_migrate_gtk_filechooser_preferences ();
-@@ -1090,11 +1991,13 @@ nautilus_application_dbus_register (GApplication     *app,
+@@ -1090,11 +2033,13 @@ nautilus_application_dbus_register (GApplication     *app,
          return FALSE;
      }
  
@@ -1503,7 +2361,7 @@ index 397cbf3..90e46d0 100644
  
      self->search_provider = nautilus_shell_search_provider_new ();
      if (!nautilus_shell_search_provider_register (self->search_provider, connection, error))
-@@ -1126,11 +2029,13 @@ nautilus_application_dbus_unregister (GApplication    *app,
+@@ -1126,11 +2071,13 @@ nautilus_application_dbus_unregister (GApplication    *app,
          g_clear_object (&self->fdb_manager);
      }
  
@@ -1517,7 +2375,7 @@ index 397cbf3..90e46d0 100644
  
      if (self->search_provider)
      {
-@@ -1146,6 +2051,14 @@ update_dbus_opened_locations (NautilusApplication *self)
+@@ -1146,6 +2093,14 @@ update_dbus_opened_locations (NautilusApplication *self)
  {
      self->dbus_location_update_timeout_id = 0;
  
@@ -1532,7 +2390,7 @@ index 397cbf3..90e46d0 100644
      g_autoptr (GHashTable) hashed_locations = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                                       g_free, NULL);
      const gchar *dbus_object_path = g_application_get_dbus_object_path (G_APPLICATION (self));
-@@ -1207,6 +2120,95 @@ schedule_dbus_location_update (NautilusApplication *self)
+@@ -1207,6 +2162,95 @@ schedule_dbus_location_update (NautilusApplication *self)
      }
  }
  
@@ -1628,7 +2486,7 @@ index 397cbf3..90e46d0 100644
  static void
  nautilus_application_window_added (GtkApplication *app,
                                     GtkWindow      *window)
-@@ -1217,11 +2219,22 @@ nautilus_application_window_added (GtkApplication *app,
+@@ -1217,11 +2261,22 @@ nautilus_application_window_added (GtkApplication *app,
  
      GTK_APPLICATION_CLASS (nautilus_application_parent_class)->window_added (app, window);
  
@@ -1651,7 +2509,7 @@ index 397cbf3..90e46d0 100644
      }
  }
  
-@@ -1317,6 +2330,10 @@ nautilus_application_search (NautilusApplication *self,
+@@ -1317,6 +2372,10 @@ nautilus_application_search (NautilusApplication *self,
  gboolean
  nautilus_application_is_sandboxed (void)
  {
@@ -1662,7 +2520,7 @@ index 397cbf3..90e46d0 100644
      static gboolean ret;
  
      static gsize init = 0;
-@@ -1328,4 +2345,5 @@ nautilus_application_is_sandboxed (void)
+@@ -1328,4 +2387,5 @@ nautilus_application_is_sandboxed (void)
      }
  
      return ret;
@@ -4110,12 +4968,64 @@ index d22b5d9..087fe16 100644
      locations = g_settings_get_strv (localsearch_preferences, key);
  
      for (idx = 0; locations[idx] != NULL; idx++)
+diff --git a/src/nautilus-location-entry.c b/src/nautilus-location-entry.c
+index 5152091..64e62fb 100644
+--- a/src/nautilus-location-entry.c
++++ b/src/nautilus-location-entry.c
+@@ -73,6 +73,7 @@ enum
+ {
+     CANCEL,
+     LOCATION_CHANGED,
++    SEARCH_REQUESTED,
+     LAST_SIGNAL
+ };
+
+@@ -728,6 +729,24 @@ nautilus_location_entry_activate (GtkEntry *entry)
+     {
+         g_autofree gchar *uri_scheme = g_uri_parse_scheme (path);
+
++        /* A plain phrase is a search, not an accidental relative URI. Keep
++         * navigation for strings that are recognisably addresses or paths:
++         * absolute paths, home-relative paths, explicit ./../ paths, paths
++         * containing a separator, and URIs with a scheme. */
++        if (!g_path_is_absolute (path) &&
++            uri_scheme == NULL &&
++            path[0] != '~' &&
++            !g_str_equal (path, ".") &&
++            !g_str_equal (path, "..") &&
++            strchr (path, G_DIR_SEPARATOR) == NULL)
++        {
++            /* Prevent editable_activate_callback(), which is connected
++             * after the class handler, from opening the phrase as a GFile. */
++            g_signal_stop_emission_by_name (entry, "activate");
++            g_signal_emit (loc_entry, signals[SEARCH_REQUESTED], 0, path);
++            return;
++        }
++
+         if (!g_path_is_absolute (path) && uri_scheme == NULL && path[0] != '~')
+         {
+             /* Fix non absolute paths */
+@@ -783,6 +802,14 @@ nautilus_location_entry_class_init (NautilusLocationEntryClass *class)
+                                     g_cclosure_marshal_generic,
+                                     G_TYPE_NONE, 1, G_TYPE_FILE);
+
++    signals[SEARCH_REQUESTED] = g_signal_new
++                                    ("search-requested",
++                                    G_TYPE_FROM_CLASS (class),
++                                    G_SIGNAL_RUN_LAST, 0,
++                                    NULL, NULL,
++                                    g_cclosure_marshal_VOID__STRING,
++                                    G_TYPE_NONE, 1, G_TYPE_STRING);
++
+     shortcut = gtk_shortcut_new (gtk_keyval_trigger_new (GDK_KEY_Escape, 0),
+                                  gtk_signal_action_new ("cancel"));
+     gtk_widget_class_add_shortcut (GTK_WIDGET_CLASS (class), shortcut);
 diff --git a/src/nautilus-macos-bridge.h b/src/nautilus-macos-bridge.h
 new file mode 100644
-index 0000000..e952f08
+index 0000000..dbaeeff
 --- /dev/null
 +++ b/src/nautilus-macos-bridge.h
-@@ -0,0 +1,602 @@
+@@ -0,0 +1,633 @@
 +/*
 + * nautilus-macos-bridge.h: C-callable API of the macOS Objective-C bridge.
 + *
@@ -4293,10 +5203,10 @@ index 0000000..e952f08
 +
 +#include <gdk/gdk.h>    /* GdkTexture (C API only) */
 +
-+/* Render the LaunchServices icon of the app bundle at @app_path (NSWorkspace
-+ * iconForFile:) into a @size_px × @size_px texture. Bridges the gap left by
-+ * gdk-pixbuf, which cannot decode modern .icns files. Returns a new GdkTexture
-+ * reference, or NULL if the icon cannot be rendered. */
++/* Render the LaunchServices icon of the app bundle at @app_path (a native
++ * path or file:// URL) into a @size_px × @size_px texture. Bridges the gap
++ * left by gdk-pixbuf, which cannot decode modern .icns files. Returns a new
++ * GdkTexture reference, or NULL if the icon cannot be rendered. */
 +GdkTexture *nautilus_macos_app_icon_texture (const char *app_path,
 +                                             int         size_px);
 +
@@ -4715,6 +5625,37 @@ index 0000000..e952f08
 +
 +/* ==========================================================================
 + * End section W14
++ * ========================================================================== */
++
++/* ==========================================================================
++ * Section W15 — mounted volumes sidebar (nautilus-macos-volumes.m)
++ * ========================================================================== */
++
++/* GIO's Unix volume monitor does not report mounted volumes on macOS.  This
++ * small value type mirrors the information the places sidebar needs from
++ * NSFileManager/NSWorkspace without leaking Objective-C types into C. */
++typedef struct
++{
++    char *name;
++    char *path;
++    gboolean is_internal;
++    gboolean is_local;
++    gboolean can_unmount;
++    gboolean can_eject;
++} NautilusMacosMountedVolume;
++
++/* Return all GUI-browsable mounted volumes (including the startup volume).
++ * Free the result with g_list_free_full (list,
++ * (GDestroyNotify) nautilus_macos_mounted_volume_free). */
++GList *nautilus_macos_get_mounted_volumes (void);
++void nautilus_macos_mounted_volume_free (NautilusMacosMountedVolume *volume);
++
++/* Unmount/eject the volume that contains @path using NSWorkspace. */
++gboolean nautilus_macos_unmount_volume (const char  *path,
++                                        GError     **error);
++
++/* ==========================================================================
++ * End section W15
 + * ========================================================================== */
 +
 +G_END_DECLS
@@ -7585,10 +8526,10 @@ index 0000000..8d4039f
 +}
 diff --git a/src/nautilus-macos-openwith.m b/src/nautilus-macos-openwith.m
 new file mode 100644
-index 0000000..0941690
+index 0000000..47332ef
 --- /dev/null
 +++ b/src/nautilus-macos-openwith.m
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,263 @@
 +/*
 + * nautilus-macos-openwith.m: Open With / default apps via NSWorkspace (W2).
 + *
@@ -7768,7 +8709,24 @@ index 0000000..0941690
 +
 +    @autoreleasepool
 +    {
-+        NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:@(app_path)];
++        NSString *path_or_url = @(app_path);
++        NSString *bundle_path = path_or_url;
++
++        /* g_osx_app_info_get_filename() returns a file:// URL, despite its
++         * name. Passing that string directly to -iconForFile: asks AppKit
++         * for a literal path beginning with "file://", which produces the
++         * blank Open With rows this bridge is meant to avoid. */
++        if ([path_or_url hasPrefix:@"file:"])
++        {
++            NSURL *bundle_url = [NSURL URLWithString:path_or_url];
++
++            if (bundle_url != nil && [bundle_url isFileURL])
++            {
++                bundle_path = [bundle_url path];
++            }
++        }
++
++        NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:bundle_path];
 +
 +        if (icon == nil)
 +        {
@@ -12479,6 +13437,160 @@ index 0000000..5367954
 +        [[SZFUpdater shared] checkForUpdatesUserInitiated:YES];
 +    }
 +}
+diff --git a/src/nautilus-macos-volumes.m b/src/nautilus-macos-volumes.m
+new file mode 100644
+index 0000000..36217fe
+--- /dev/null
++++ b/src/nautilus-macos-volumes.m
+@@ -0,0 +1,148 @@
++/*
++ * nautilus-macos-volumes.m: mounted-volume discovery and eject support.
++ *
++ * Copyright (C) 2026 The Nautilus authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#define G_LOG_DOMAIN "nautilus-macos-volumes"
++
++#include <config.h>
++#include "nautilus-macos-bridge.h"
++
++#import <AppKit/AppKit.h>
++
++static gboolean
++volume_path_is_system_private (NSString *path)
++{
++    return [path hasPrefix:@"/System/Volumes/"] ||
++           [path hasPrefix:@"/private/var/"];
++}
++
++void
++nautilus_macos_mounted_volume_free (NautilusMacosMountedVolume *volume)
++{
++    if (volume == NULL)
++    {
++        return;
++    }
++
++    g_free (volume->name);
++    g_free (volume->path);
++    g_free (volume);
++}
++
++GList *
++nautilus_macos_get_mounted_volumes (void)
++{
++    GList *volumes = NULL;
++
++    @autoreleasepool
++    {
++        NSArray *keys = @[
++            NSURLVolumeNameKey,
++            NSURLVolumeIsBrowsableKey,
++            NSURLVolumeIsInternalKey,
++            NSURLVolumeIsLocalKey,
++            NSURLVolumeIsEjectableKey,
++            NSURLVolumeIsRemovableKey,
++        ];
++        NSArray<NSURL *> *urls =
++            [[NSFileManager defaultManager]
++             mountedVolumeURLsIncludingResourceValuesForKeys:keys
++                                                    options:NSVolumeEnumerationSkipHiddenVolumes];
++        NSMutableSet<NSString *> *seen_paths = [NSMutableSet set];
++
++        for (NSURL *url in urls)
++        {
++            NSNumber *is_browsable = nil;
++            NSNumber *is_internal = nil;
++            NSNumber *is_local = nil;
++            NSNumber *is_ejectable = nil;
++            NSNumber *is_removable = nil;
++            NSString *volume_name = nil;
++            NSString *path = [[url path] stringByStandardizingPath];
++            BOOL removable = NO;
++            BOOL writable = NO;
++            BOOL unmountable = NO;
++
++            if (path == nil || [path length] == 0 ||
++                volume_path_is_system_private (path) ||
++                [seen_paths containsObject:path])
++            {
++                continue;
++            }
++
++            [url getResourceValue:&is_browsable forKey:NSURLVolumeIsBrowsableKey error:nil];
++            if (is_browsable != nil && ![is_browsable boolValue])
++            {
++                continue;
++            }
++
++            [url getResourceValue:&volume_name forKey:NSURLVolumeNameKey error:nil];
++            [url getResourceValue:&is_internal forKey:NSURLVolumeIsInternalKey error:nil];
++            [url getResourceValue:&is_local forKey:NSURLVolumeIsLocalKey error:nil];
++            [url getResourceValue:&is_ejectable forKey:NSURLVolumeIsEjectableKey error:nil];
++            [url getResourceValue:&is_removable forKey:NSURLVolumeIsRemovableKey error:nil];
++
++            [[NSWorkspace sharedWorkspace] getFileSystemInfoForPath:path
++                                                        isRemovable:&removable
++                                                           isWritable:&writable
++                                                        isUnmountable:&unmountable
++                                                           description:nil
++                                                                  type:nil];
++
++            if (volume_name == nil || [volume_name length] == 0)
++            {
++                volume_name = [path lastPathComponent];
++            }
++            if (volume_name == nil || [volume_name length] == 0)
++            {
++                volume_name = @"Macintosh HD";
++            }
++
++            NautilusMacosMountedVolume *volume = g_new0 (NautilusMacosMountedVolume, 1);
++            volume->name = g_strdup ([volume_name UTF8String]);
++            volume->path = g_strdup ([path fileSystemRepresentation]);
++            volume->is_internal = is_internal != nil && [is_internal boolValue];
++            volume->is_local = is_local == nil || [is_local boolValue];
++            volume->can_unmount = unmountable;
++            volume->can_eject = (is_ejectable != nil && [is_ejectable boolValue]) ||
++                                (is_removable != nil && [is_removable boolValue]) ||
++                                removable;
++
++            volumes = g_list_prepend (volumes, volume);
++            [seen_paths addObject:path];
++        }
++    }
++
++    return g_list_reverse (volumes);
++}
++
++gboolean
++nautilus_macos_unmount_volume (const char  *path,
++                               GError     **error)
++{
++    g_return_val_if_fail (path != NULL, FALSE);
++
++    @autoreleasepool
++    {
++        NSURL *url = [NSURL fileURLWithPath:@(path) isDirectory:YES];
++        NSError *ns_error = nil;
++
++        if ([[NSWorkspace sharedWorkspace] unmountAndEjectDeviceAtURL:url
++                                                                 error:&ns_error])
++        {
++            return TRUE;
++        }
++
++        g_set_error (error,
++                     G_IO_ERROR,
++                     G_IO_ERROR_FAILED,
++                     "%s",
++                     ns_error != nil ? [[ns_error localizedDescription] UTF8String]
++                                     : "macOS refused to unmount the volume");
++        return FALSE;
++    }
++}
 diff --git a/src/nautilus-main.c b/src/nautilus-main.c
 index 3ca374e..460e158 100644
 --- a/src/nautilus-main.c
@@ -14023,21 +15135,146 @@ index 555b0f4..f577deb 100644
  
      G_OBJECT_CLASS (nautilus_search_engine_parent_class)->finalize (object);
 diff --git a/src/nautilus-sidebar.c b/src/nautilus-sidebar.c
-index c9bd4a6..36e9ad0 100644
+index c9bd4a6..85df823 100644
 --- a/src/nautilus-sidebar.c
 +++ b/src/nautilus-sidebar.c
-@@ -39,6 +39,10 @@
+@@ -39,6 +39,14 @@
  #include "nautilus-ui-utilities.h"
  #include "nautilus-window-slot.h"
  
 +#ifdef __APPLE__
 +#include "nautilus-macos-bridge.h"
++
++#define MACOS_VOLUME_PATH_DATA "nautilus-macos-volume-path"
++#define MACOS_VOLUME_CAN_UNMOUNT_DATA "nautilus-macos-volume-can-unmount"
++#define MACOS_VOLUME_CAN_EJECT_DATA "nautilus-macos-volume-can-eject"
 +#endif
 +
  #ifdef GDK_WINDOWING_X11
  #include <gdk/x11/gdkx.h>
  #endif
-@@ -737,6 +741,7 @@ update_places (NautilusSidebar *sidebar)
+@@ -118,6 +126,9 @@ struct _NautilusSidebar
+ #endif
+
+     GVolumeMonitor *volume_monitor;
++#ifdef __APPLE__
++    GFileMonitor *macos_volumes_monitor;
++#endif
+     GtkSettings *gtk_settings;
+     GFile *current_location;
+
+@@ -455,6 +466,90 @@ recent_files_setting_is_enabled (NautilusSidebar *sidebar)
+     return enabled;
+ }
+
++#ifdef __APPLE__
++static GHashTable *
++macos_collect_gio_mount_uris (NautilusSidebar *sidebar)
++{
++    GHashTable *uris = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
++    GList *mounts = g_volume_monitor_get_mounts (sidebar->volume_monitor);
++
++    for (GList *l = mounts; l != NULL; l = l->next)
++    {
++        GMount *mount = l->data;
++        g_autoptr (GFile) root = g_mount_get_default_location (mount);
++
++        if (root != NULL)
++        {
++            g_hash_table_add (uris, g_file_get_uri (root));
++        }
++    }
++
++    g_list_free_full (mounts, g_object_unref);
++    return uris;
++}
++
++static void
++add_macos_mounted_volumes (NautilusSidebar *sidebar,
++                           GHashTable      *gio_mount_uris)
++{
++    GList *volumes = nautilus_macos_get_mounted_volumes ();
++
++    for (GList *l = volumes; l != NULL; l = l->next)
++    {
++        NautilusMacosMountedVolume *volume = l->data;
++        g_autofree char *uri = g_filename_to_uri (volume->path, NULL, NULL);
++        g_autoptr (GIcon) icon = NULL;
++        GtkWidget *row;
++
++        if (uri == NULL || g_hash_table_contains (gio_mount_uris, uri))
++        {
++            continue;
++        }
++
++        if (!g_hash_table_add (gio_mount_uris, g_strdup (uri)))
++        {
++            continue;
++        }
++
++        if (!volume->is_local)
++        {
++            icon = g_themed_icon_new_with_default_fallbacks ("folder-remote-symbolic");
++        }
++        else if (volume->is_internal)
++        {
++            icon = g_themed_icon_new_with_default_fallbacks ("drive-harddisk-system-symbolic");
++        }
++        else
++        {
++            icon = g_themed_icon_new_with_default_fallbacks ("drive-removable-media-symbolic");
++        }
++
++        row = add_place (sidebar,
++                         volume->is_internal ? NAUTILUS_SIDEBAR_ROW_INTERNAL_MOUNT
++                                             : NAUTILUS_SIDEBAR_ROW_EXTERNAL_MOUNT,
++                         NAUTILUS_SIDEBAR_SECTION_MOUNTS,
++                         volume->name, icon, NULL, uri,
++                         NULL, NULL, NULL, NULL, 0, volume->path);
++        g_object_set_data_full (G_OBJECT (row), MACOS_VOLUME_PATH_DATA,
++                                g_strdup (volume->path), g_free);
++        g_object_set_data (G_OBJECT (row), MACOS_VOLUME_CAN_UNMOUNT_DATA,
++                           GINT_TO_POINTER (volume->can_unmount));
++        g_object_set_data (G_OBJECT (row), MACOS_VOLUME_CAN_EJECT_DATA,
++                           GINT_TO_POINTER (volume->can_eject));
++
++        if (volume->can_unmount || volume->can_eject)
++        {
++            g_object_set (row,
++                          "ejectable", TRUE,
++                          "eject-tooltip", volume->can_eject ? _("Eject") : _("Unmount"),
++                          NULL);
++        }
++    }
++
++    g_list_free_full (volumes, (GDestroyNotify) nautilus_macos_mounted_volume_free);
++}
++#endif
++
+ static gboolean
+ recent_scheme_is_supported (void)
+ {
+@@ -666,6 +761,9 @@ update_places (NautilusSidebar *sidebar)
+     CloudProvidersAccount *cloud_provider_account;
+     CloudProvidersProvider *cloud_provider;
+ #endif
++#ifdef __APPLE__
++    g_autoptr (GHashTable) gio_mount_uris = NULL;
++#endif
+
+     /* save original selection */
+     selected = gtk_list_box_get_selected_row (GTK_LIST_BOX (sidebar->list_box));
+@@ -687,6 +785,9 @@ update_places (NautilusSidebar *sidebar)
+     }
+
+     network_mounts = network_volumes = NULL;
++#ifdef __APPLE__
++    gio_mount_uris = macos_collect_gio_mount_uris (sidebar);
++#endif
+
+     /* add built-in places */
+
+@@ -737,6 +838,7 @@ update_places (NautilusSidebar *sidebar)
          }
      }
  
@@ -14045,7 +15282,7 @@ index c9bd4a6..36e9ad0 100644
      /* Network view */
      start_icon = g_themed_icon_new_with_default_fallbacks (ICON_NAME_NETWORK_VIEW);
      add_place (sidebar, NAUTILUS_SIDEBAR_ROW_BUILT_IN,
-@@ -745,6 +750,10 @@ update_places (NautilusSidebar *sidebar)
+@@ -745,6 +847,10 @@ update_places (NautilusSidebar *sidebar)
                 NULL, NULL, NULL, NULL, 0,
                 _("Open Network Locations"));
      g_object_unref (start_icon);
@@ -14056,7 +15293,20 @@ index c9bd4a6..36e9ad0 100644
  
      /* Trash */
      if (sidebar->show_trash)
-@@ -1845,6 +1854,15 @@ open_row (NautilusSidebarRow *self,
+@@ -1098,6 +1204,12 @@ update_places (NautilusSidebar *sidebar)
+         g_free (tooltip);
+     }
+
++#ifdef __APPLE__
++    /* GLib's Unix volume monitor is empty on macOS.  Merge AppKit's
++     * browsable mounted volumes into the normal Nautilus mounts section;
++     * keep any GIO-provided URI authoritative to avoid duplicate roots. */
++    add_macos_mounted_volumes (sidebar, gio_mount_uris);
++#endif
+
+     g_list_free_full (network_volumes, g_object_unref);
+     g_list_free_full (network_mounts, g_object_unref);
+@@ -1845,6 +1957,15 @@ open_row (NautilusSidebarRow *self,
  
      if (uri != NULL)
      {
@@ -14072,6 +15322,166 @@ index c9bd4a6..36e9ad0 100644
          g_autoptr (GFile) location = g_file_new_for_uri (uri);
          call_open_location (sidebar, location, NULL, open_flags);
      }
+@@ -2294,6 +2415,55 @@ do_unmount (GMount          *mount,
+     }
+ }
+
++#ifdef __APPLE__
++static gboolean
++refresh_places_idle (gpointer user_data)
++{
++    update_places (NAUTILUS_PLACES_SIDEBAR (user_data));
++    return G_SOURCE_REMOVE;
++}
++
++static void
++do_macos_volume_unmount (NautilusSidebarRow *row,
++                         NautilusSidebar    *sidebar)
++{
++    const char *row_path = g_object_get_data (G_OBJECT (row), MACOS_VOLUME_PATH_DATA);
++    gboolean can_eject = GPOINTER_TO_INT (
++        g_object_get_data (G_OBJECT (row), MACOS_VOLUME_CAN_EJECT_DATA));
++    g_autofree char *path = NULL;
++    g_autofree char *name = NULL;
++    g_autofree char *primary = NULL;
++    g_autoptr (GError) error = NULL;
++
++    if (row_path == NULL)
++    {
++        return;
++    }
++
++    path = g_strdup (row_path);
++    g_object_get (row, "label", &name, NULL);
++    nautilus_sidebar_row_set_busy (row, TRUE);
++
++    if (!nautilus_macos_unmount_volume (path, &error))
++    {
++        primary = g_strdup_printf (can_eject ? _("Unable to eject “%s”")
++                                              : _("Unable to unmount “%s”"),
++                                   name);
++        show_error_message (sidebar, primary, error->message);
++        nautilus_sidebar_row_set_busy (row, FALSE);
++        return;
++    }
++
++    /* NSWorkspace's operation is synchronous. Rebuild outside the button or
++     * menu signal emission so destroying the old row cannot invalidate GTK's
++     * current signal frame. */
++    g_idle_add_full (G_PRIORITY_DEFAULT_IDLE,
++                     refresh_places_idle,
++                     g_object_ref (sidebar),
++                     g_object_unref);
++}
++#endif
++
+ static void
+ unmount_shortcut_cb (GSimpleAction *action,
+                      GVariant      *parameter,
+@@ -2302,6 +2472,14 @@ unmount_shortcut_cb (GSimpleAction *action,
+     NautilusSidebar *sidebar = data;
+     GMount *mount;
+
++#ifdef __APPLE__
++    if (g_object_get_data (G_OBJECT (sidebar->context_row), MACOS_VOLUME_PATH_DATA) != NULL)
++    {
++        do_macos_volume_unmount (sidebar->context_row, sidebar);
++        return;
++    }
++#endif
++
+     g_object_get (sidebar->context_row,
+                   "mount", &mount,
+                   NULL);
+@@ -2457,6 +2635,14 @@ eject_shortcut_cb (GSimpleAction *action,
+     GVolume *volume;
+     GDrive *drive;
+
++#ifdef __APPLE__
++    if (g_object_get_data (G_OBJECT (sidebar->context_row), MACOS_VOLUME_PATH_DATA) != NULL)
++    {
++        do_macos_volume_unmount (sidebar->context_row, sidebar);
++        return;
++    }
++#endif
++
+     g_object_get (sidebar->context_row,
+                   "mount", &mount,
+                   "volume", &volume,
+@@ -2489,6 +2675,16 @@ eject_or_unmount_bookmark (NautilusSidebarRow *row)
+     gboolean ret;
+     NautilusSidebar *sidebar;
+
++#ifdef __APPLE__
++    if (g_object_get_data (G_OBJECT (row), MACOS_VOLUME_PATH_DATA) != NULL)
++    {
++        g_object_get (row, "sidebar", &sidebar, NULL);
++        do_macos_volume_unmount (row, sidebar);
++        g_object_unref (sidebar);
++        return TRUE;
++    }
++#endif
++
+     g_object_get (row,
+                   "sidebar", &sidebar,
+                   "mount", &mount,
+@@ -2915,6 +3111,15 @@ create_row_popover (NautilusSidebar    *sidebar,
+                   NULL);
+
+     check_unmount_and_eject (mount, volume, drive, &show_unmount, &show_eject);
++#ifdef __APPLE__
++    if (g_object_get_data (G_OBJECT (row), MACOS_VOLUME_PATH_DATA) != NULL)
++    {
++        show_eject = GPOINTER_TO_INT (
++            g_object_get_data (G_OBJECT (row), MACOS_VOLUME_CAN_EJECT_DATA));
++        show_unmount = !show_eject && GPOINTER_TO_INT (
++            g_object_get_data (G_OBJECT (row), MACOS_VOLUME_CAN_UNMOUNT_DATA));
++    }
++#endif
+     if (uri != NULL)
+     {
+         file = g_file_new_for_uri (uri);
+@@ -3529,6 +3734,29 @@ create_volume_monitor (NautilusSidebar *sidebar)
+                              G_CALLBACK (update_places), sidebar, G_CONNECT_SWAPPED);
+     g_signal_connect_object (sidebar->volume_monitor, "drive_changed",
+                              G_CALLBACK (update_places), sidebar, G_CONNECT_SWAPPED);
++
++#ifdef __APPLE__
++    /* GUnixVolumeMonitor has no Darwin mount backend. /Volumes is the stable
++     * namespace used by Disk Arbitration and Finder, so watching it gives us
++     * hot-plug refreshes while NSFileManager supplies the actual metadata. */
++    g_autoptr (GFile) volumes_directory = g_file_new_for_path ("/Volumes");
++    g_autoptr (GError) error = NULL;
++
++    sidebar->macos_volumes_monitor =
++        g_file_monitor_directory (volumes_directory,
++                                  G_FILE_MONITOR_WATCH_MOUNTS,
++                                  NULL,
++                                  &error);
++    if (sidebar->macos_volumes_monitor != NULL)
++    {
++        g_signal_connect_object (sidebar->macos_volumes_monitor, "changed",
++                                 G_CALLBACK (update_places), sidebar, G_CONNECT_SWAPPED);
++    }
++    else
++    {
++        g_warning ("Unable to watch /Volumes for mount changes: %s", error->message);
++    }
++#endif
+ }
+
+ static void
+@@ -3798,6 +4026,10 @@ nautilus_sidebar_dispose (GObject *object)
+         g_clear_object (&sidebar->volume_monitor);
+     }
+
++#ifdef __APPLE__
++    g_clear_object (&sidebar->macos_volumes_monitor);
++#endif
++
+     if (sidebar->hostnamed_cancellable != NULL)
+     {
+         g_cancellable_cancel (sidebar->hostnamed_cancellable);
 diff --git a/src/nautilus-tag-manager.c b/src/nautilus-tag-manager.c
 index c34a17c..58e9ea6 100644
 --- a/src/nautilus-tag-manager.c
@@ -14742,7 +16152,7 @@ index 0000000..8dacf4f
 +    return task->pixbuf != NULL ? g_object_ref (task->pixbuf) : NULL;
 +}
 diff --git a/src/nautilus-toolbar.c b/src/nautilus-toolbar.c
-index a20b99d..c9ef390 100644
+index a20b99d..b5d4bb2 100644
 --- a/src/nautilus-toolbar.c
 +++ b/src/nautilus-toolbar.c
 @@ -62,6 +62,14 @@ struct _NautilusToolbar
@@ -14770,7 +16180,35 @@ index a20b99d..c9ef390 100644
      NUM_PROPERTIES
  };
  
-@@ -349,6 +360,24 @@ nautilus_toolbar_get_property (GObject    *object,
+@@ -221,6 +232,17 @@ on_location_entry_location_changed (NautilusLocationEntry *entry,
+     nautilus_window_slot_open_location_full (self->window_slot, location, NULL);
+ }
+
++static void
++on_location_entry_search_requested (NautilusLocationEntry *entry,
++                                    const char            *text,
++                                    gpointer               user_data)
++{
++    NautilusToolbar *self = NAUTILUS_TOOLBAR (user_data);
++
++    nautilus_toolbar_close_location_entry (self);
++    nautilus_window_slot_search_text (self->window_slot, text);
++}
++
+ static void
+ action_edit_location (GtkWidget  *widget,
+                       const char *action_name,
+@@ -296,6 +318,9 @@ nautilus_toolbar_init (NautilusToolbar *self)
+     g_signal_connect_object (self->location_entry, "location-changed",
+                              G_CALLBACK (on_location_entry_location_changed), self,
+                              G_CONNECT_DEFAULT);
++    g_signal_connect_object (self->location_entry, "search-requested",
++                             G_CALLBACK (on_location_entry_search_requested), self,
++                             G_CONNECT_DEFAULT);
+     g_signal_connect_object (self->location_entry, "cancel",
+                              G_CALLBACK (nautilus_toolbar_close_location_entry), self,
+                              G_CONNECT_SWAPPED);
+@@ -349,6 +374,24 @@ nautilus_toolbar_get_property (GObject    *object,
          }
          break;
  
@@ -14795,7 +16233,7 @@ index a20b99d..c9ef390 100644
          default:
          {
              G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
-@@ -414,6 +443,24 @@ nautilus_toolbar_set_property (GObject      *object,
+@@ -414,6 +457,24 @@ nautilus_toolbar_set_property (GObject      *object,
          }
          break;
  
@@ -14820,7 +16258,7 @@ index a20b99d..c9ef390 100644
          default:
          {
              G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
-@@ -438,6 +485,7 @@ nautilus_toolbar_finalize (GObject *obj)
+@@ -438,6 +499,7 @@ nautilus_toolbar_finalize (GObject *obj)
  {
      NautilusToolbar *self = NAUTILUS_TOOLBAR (obj);
  
@@ -14828,7 +16266,7 @@ index a20b99d..c9ef390 100644
      g_clear_weak_pointer (&self->focus_before_location_entry);
  
      g_signal_handlers_disconnect_by_func (nautilus_preferences,
-@@ -491,6 +539,16 @@ nautilus_toolbar_class_init (NautilusToolbarClass *klass)
+@@ -491,6 +553,16 @@ nautilus_toolbar_class_init (NautilusToolbarClass *klass)
      properties[PROP_SHOW_VIEW_CONTROLS] =
          g_param_spec_boolean ("show-view-controls", NULL, NULL, TRUE,
                                G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
@@ -14904,10 +16342,73 @@ index de42f6c..17d2909 100644
      if (g_test_initialized ())
      {
 diff --git a/src/nautilus-window-slot.c b/src/nautilus-window-slot.c
-index 5e4a928..815c59d 100644
+index 5e4a928..2412896 100644
 --- a/src/nautilus-window-slot.c
 +++ b/src/nautilus-window-slot.c
-@@ -1335,6 +1335,13 @@ nautilus_window_slot_init (NautilusWindowSlot *self)
+@@ -35,6 +35,7 @@
+ #include "nautilus-mime-actions.h"
+ #include "nautilus-query.h"
+ #include "nautilus-query-editor.h"
++#include "nautilus-search-directory.h"
+ #include "nautilus-scheme.h"
+ #include "nautilus-tag-manager.h"
+ #include "nautilus-toolbar.h"
+@@ -543,6 +544,54 @@ nautilus_window_slot_search (NautilusWindowSlot *self,
+     }
+ }
+
++void
++nautilus_window_slot_search_text (NautilusWindowSlot *self,
++                                  const char         *text)
++{
++    g_autoptr (NautilusQuery) query = NULL;
++    g_autoptr (NautilusDirectory) directory = NULL;
++    g_autoptr (GFile) search_location = NULL;
++    GFile *location;
++
++    g_return_if_fail (NAUTILUS_IS_WINDOW_SLOT (self));
++    g_return_if_fail (text != NULL && *text != '\0');
++
++    location = nautilus_window_slot_get_current_location (self);
++    if (location == NULL)
++    {
++        return;
++    }
++
++    /* If invoked while displaying search results, retain their real source
++     * folder rather than accidentally using the internal search:/// URI. */
++    directory = nautilus_directory_get (location);
++    if (NAUTILUS_IS_SEARCH_DIRECTORY (directory))
++    {
++        search_location = nautilus_search_directory_get_search_location (
++            NAUTILUS_SEARCH_DIRECTORY (directory));
++    }
++    else
++    {
++        search_location = g_object_ref (location);
++    }
++
++    if (search_location == NULL)
++    {
++        return;
++    }
++
++    query = nautilus_query_new ();
++    nautilus_query_set_text (query, text);
++    nautilus_query_set_location (query, search_location);
++
++    if (nautilus_window_slot_get_search_global (self))
++    {
++        nautilus_window_slot_set_search_global (self, FALSE);
++    }
++
++    nautilus_window_slot_search (self, query);
++}
++
+ gboolean
+ nautilus_window_slot_handle_activate_files (NautilusWindowSlot *self,
+                                             GList              *files)
+@@ -1335,6 +1384,13 @@ nautilus_window_slot_init (NautilusWindowSlot *self)
                                      "slot",
                                      G_ACTION_GROUP (self->slot_action_group));
  
@@ -14921,7 +16422,7 @@ index 5e4a928..815c59d 100644
      self->shortcuts = GTK_SHORTCUT_CONTROLLER (gtk_shortcut_controller_new ());
  
      gtk_shortcut_controller_set_scope (self->shortcuts, GTK_SHORTCUT_SCOPE_MANAGED);
-@@ -2203,8 +2210,12 @@ nautilus_window_slot_back_or_forward (NautilusWindowSlot *self,
+@@ -2203,8 +2259,12 @@ nautilus_window_slot_back_or_forward (NautilusWindowSlot *self,
  
      if (back)
      {
@@ -14936,8 +16437,21 @@ index 5e4a928..815c59d 100644
          {
              nautilus_window_slot_set_search_visible (self, FALSE);
              return;
+diff --git a/src/nautilus-window-slot.h b/src/nautilus-window-slot.h
+index 216989d..a7c91b2 100644
+--- a/src/nautilus-window-slot.h
++++ b/src/nautilus-window-slot.h
+@@ -107,6 +107,8 @@ NautilusSelectionSource nautilus_window_slot_get_selection_source (NautilusWindo
+
+ void     nautilus_window_slot_search                       (NautilusWindowSlot *slot,
+                                                             NautilusQuery      *query);
++void     nautilus_window_slot_search_text                  (NautilusWindowSlot *slot,
++                                                            const char         *text);
+
+ void nautilus_window_slot_restore_navigation_state (NautilusWindowSlot      *self,
+                                                     NautilusNavigationState *data);
 diff --git a/src/nautilus-window.c b/src/nautilus-window.c
-index 91e5f48..c561495 100644
+index 91e5f48..d028a4a 100644
 --- a/src/nautilus-window.c
 +++ b/src/nautilus-window.c
 @@ -103,6 +103,8 @@ struct _NautilusWindow
@@ -15049,7 +16563,17 @@ index 91e5f48..c561495 100644
  static void
  nautilus_window_set_up_sidebar (NautilusWindow *window)
  {
-@@ -1199,6 +1294,7 @@ nautilus_window_constructed (GObject *self)
+@@ -1094,7 +1189,9 @@ nautilus_window_initialize_actions (NautilusWindow *window)
+ #define ACCELS(...) ((const char *[]) { __VA_ARGS__, NULL })
+
+     app = g_application_get_default ();
++#ifndef __APPLE__
+     nautilus_application_set_accelerator (app, "win.new-tab", "<control>t");
++#endif
+     nautilus_application_set_accelerator (app, "win.close-current-view", "<control>w");
+
+     nautilus_application_set_accelerator (app, "win.undo", "<control>z");
+@@ -1199,6 +1296,7 @@ nautilus_window_constructed (GObject *self)
      notify_decoration_layout_cb (window);
  
      nautilus_window_set_up_sidebar (window);
@@ -15057,7 +16581,7 @@ index 91e5f48..c561495 100644
  
  
      g_signal_connect_object (nautilus_file_undo_manager_get (), "undo-changed",
-@@ -1276,6 +1372,9 @@ nautilus_window_save_geometry (NautilusWindow *window)
+@@ -1276,6 +1374,9 @@ nautilus_window_save_geometry (NautilusWindow *window)
      g_settings_set_value (nautilus_window_state,
                            NAUTILUS_WINDOW_STATE_INITIAL_SIZE,
                            initial_size);
@@ -15067,7 +16591,7 @@ index 91e5f48..c561495 100644
  }
  
  void
-@@ -1669,6 +1768,7 @@ nautilus_window_class_init (NautilusWindowClass *class)
+@@ -1669,6 +1770,7 @@ nautilus_window_class_init (NautilusWindowClass *class)
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, undo_redo_section);
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, toolbar);
      gtk_widget_class_bind_template_child (wclass, NautilusWindow, split_view);
@@ -15480,3 +17004,171 @@ index e439d3c..b20c105 100644
      }
    }
  
+diff --git a/test/display/meson.build b/test/display/meson.build
+index 93375e3..e7c3b99 100644
+--- a/test/display/meson.build
++++ b/test/display/meson.build
+@@ -48,3 +48,19 @@ foreach test_name, extra_args : tests
+     suite: suite,
+   )
+ endforeach
++
++if macos_port
++  macos_sidebar_test = executable(
++    'test-macos-sidebar',
++    'test-macos-sidebar.c',
++    dependencies: [libnautilus_dep],
++  )
++  test(
++    'test-macos-sidebar',
++    macos_sidebar_test,
++    env: [test_env],
++    is_parallel: false,
++    timeout: 60,
++    suite: ['display'],
++  )
++endif
+diff --git a/test/display/test-macos-sidebar.c b/test/display/test-macos-sidebar.c
+new file mode 100644
+index 0000000..e61a3e2
+--- /dev/null
++++ b/test/display/test-macos-sidebar.c
+@@ -0,0 +1,56 @@
++#define G_LOG_DOMAIN "test-macos-sidebar"
++
++#include <nautilus-application.h>
++#include <nautilus-file-utilities.h>
++#include <nautilus-global-preferences.h>
++#include <nautilus-macos-bridge.h>
++#include <nautilus-resources.h>
++#include <nautilus-sidebar.h>
++#include <nautilus-tag-manager.h>
++
++#include <glib.h>
++#include <gtk/gtk.h>
++
++static void
++test_sidebar_shows_mounted_volumes (void)
++{
++    g_autoptr (NautilusSidebar) sidebar = NAUTILUS_PLACES_SIDEBAR (nautilus_sidebar_new ());
++    GList *volumes = nautilus_macos_get_mounted_volumes ();
++
++    g_object_ref_sink (sidebar);
++    g_assert_nonnull (volumes);
++
++    for (GList *l = volumes; l != NULL; l = l->next)
++    {
++        NautilusMacosMountedVolume *volume = l->data;
++        g_autoptr (GFile) location = g_file_new_for_path (volume->path);
++        g_autoptr (GFile) selected = NULL;
++
++        nautilus_sidebar_set_location (sidebar, location);
++        selected = nautilus_sidebar_get_location (sidebar);
++        g_assert_nonnull (selected);
++        g_assert_true (g_file_equal (selected, location));
++    }
++
++    g_list_free_full (volumes, (GDestroyNotify) nautilus_macos_mounted_volume_free);
++}
++
++int
++main (int   argc,
++      char *argv[])
++{
++    g_autoptr (NautilusTagManager) tag_manager = NULL;
++
++    gtk_test_init (&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
++    nautilus_register_resource ();
++    nautilus_ensure_extension_points ();
++    nautilus_global_preferences_init ();
++    tag_manager = nautilus_tag_manager_new_dummy ();
++
++    g_autoptr (NautilusApplication) app = nautilus_application_new ();
++
++    g_test_add_func ("/macos-sidebar/shows-mounted-volumes",
++                     test_sidebar_shows_mounted_volumes);
++
++    return g_test_run ();
++}
+diff --git a/test/displayless/meson.build b/test/displayless/meson.build
+index 33adf34..0f41ad9 100644
+--- a/test/displayless/meson.build
++++ b/test/displayless/meson.build
+@@ -55,3 +55,18 @@ foreach test_name, extra_args : tests
+     suite: suite,
+   )
+ endforeach
++
++if macos_port
++  macos_volumes_test = executable(
++    'test-macos-volumes',
++    'test-macos-volumes.c',
++    dependencies: [libnautilus_dep],
++  )
++  test(
++    'test-macos-volumes',
++    macos_volumes_test,
++    env: [test_env],
++    timeout: 60,
++    suite: ['displayless'],
++  )
++endif
+diff --git a/test/displayless/test-macos-volumes.c b/test/displayless/test-macos-volumes.c
+new file mode 100644
+index 0000000..451bf6a
+--- /dev/null
++++ b/test/displayless/test-macos-volumes.c
+@@ -0,0 +1,53 @@
++#define G_LOG_DOMAIN "test-macos-volumes"
++
++#include <nautilus-macos-bridge.h>
++
++#include <glib.h>
++
++static void
++test_mounted_volumes_are_browsable_and_unique (void)
++{
++    g_autoptr (GHashTable) paths = g_hash_table_new_full (g_str_hash,
++                                                          g_str_equal,
++                                                          g_free,
++                                                          NULL);
++    GList *volumes = nautilus_macos_get_mounted_volumes ();
++    gboolean found_startup_volume = FALSE;
++
++    g_assert_nonnull (volumes);
++
++    for (GList *l = volumes; l != NULL; l = l->next)
++    {
++        NautilusMacosMountedVolume *volume = l->data;
++
++        g_assert_nonnull (volume->name);
++        g_assert_cmpstr (volume->name, !=, "");
++        g_assert_nonnull (volume->path);
++        g_assert_true (g_path_is_absolute (volume->path));
++        g_assert_true (g_file_test (volume->path, G_FILE_TEST_IS_DIR));
++        g_assert_false (g_str_has_prefix (volume->path, "/System/Volumes/"));
++        g_assert_true (g_hash_table_add (paths, g_strdup (volume->path)));
++
++        if (g_str_equal (volume->path, "/"))
++        {
++            found_startup_volume = TRUE;
++            g_assert_true (volume->is_internal);
++            g_assert_false (volume->can_unmount);
++            g_assert_false (volume->can_eject);
++        }
++    }
++
++    g_assert_true (found_startup_volume);
++    g_list_free_full (volumes, (GDestroyNotify) nautilus_macos_mounted_volume_free);
++}
++
++int
++main (int   argc,
++      char *argv[])
++{
++    g_test_init (&argc, &argv, NULL);
++    g_test_add_func ("/macos-volumes/browsable-and-unique",
++                     test_mounted_volumes_are_browsable_and_unique);
++
++    return g_test_run ();
++}
