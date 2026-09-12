@@ -5,7 +5,7 @@
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest/download/ShenzhenFiles-mac-arm64.dmg"><img src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" height="46"></a>
 
-<sub>Latest <b>26.8.27-2</b> · Apple Silicon</sub>
+<sub>Latest <b>26.9.12-1</b> · Apple Silicon</sub>
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest">All releases</a> · <a href="https://github.com/casimir-engineering/shenzhen-files">Source</a>
 
@@ -18,12 +18,14 @@
 ## What the port adds on macOS
 
 - **Native menu bar** — the full GNOME Files menu rendered as a real NSMenu bar (File · Edit · View · Go · Window · Help), with working key equivalents.
-- **Finder-like Dock lifecycle** — closing the last window keeps the app alive; clicking the Dock icon opens a new window centered on the screen you clicked from.
+- **Finder-like Dock lifecycle** — closing the last window keeps the app alive; clicking the Dock icon or pressing Cmd-T opens a new window, while Cmd-T adds a tab when a window exists.
+- **Mounted drives in the sidebar** — the startup disk, external disks, disk images, and network volumes appear under mounts with native eject or unmount controls and automatic hot-plug refresh.
 - **QuickLook everywhere** — real macOS thumbnails in the grid, space-bar preview, and LaunchServices file-type icons for anything QuickLook can't draw.
 - **Finder-compatible clipboard** — copying in Finder and pasting in Shenzhen Files transfers the original files, including from read-only locations, instead of mistaking Finder's preview image for the file.
-- **Spotlight-backed search** — the search field streams results from Spotlight, scoped to the folder you're in.
+- **Spotlight-backed search** — the search field streams results from Spotlight, scoped to the folder you're in; plain text entered in the location field searches there, while paths and addresses still navigate.
 - **System integration, strictly opt-in** — open folders by default, sync Finder's sidebar favorites, hide the Finder desktop. Everything is off by default, revertible, and records the prior system state before changing anything.
 - **Native Trash and permanent delete** — regular deletion moves items to the system Trash; Shift+Delete asks for confirmation before permanently deleting them. Show in Finder, Open in Terminal, and "Open With" are also bridged to native macOS services.
+- **Useful Open With chooser** — installed apps show their real macOS icons, and apps explicitly chosen for a file type are promoted into a private, bounded Frequently Used section.
 - **Full Disk Access onboarding** — a one-time walkthrough for the TCC grant that browsing the Trash needs.
 - **Native-sized macOS icon** — the blue folder and legible 深圳 mark use the LaunchServices-rendered enclosure and optical safe area, matching neighboring Dock icons without a nested tile or oversized raw canvas.
 - **Auto-update** — a silent daily check against GitHub releases plus a "Check for Updates…" menu item; updates download into persistent secure staging, verify offline (Developer ID + notarization, pinned Team ID and bundle id), atomically swap the bundle, refresh the app icon, and relaunch the exact new build in place.

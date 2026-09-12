@@ -38,9 +38,9 @@ APP="${1:-$repo_root/dist/Shenzhen Files.app}"
 # a globally increasing numeric CFBundleVersion for LaunchServices/App Store
 # cache semantics, and an explicit YY.M.DD-BUILD release tag for GitHub.
 BUNDLE_ID="com.intuition.shenzhenfiles"
-SHORT_VERSION="26.8.27"
-RELEASE_BUILD="2"
-BUNDLE_VERSION="26082702"
+SHORT_VERSION="26.9.12"
+RELEASE_BUILD="1"
+BUNDLE_VERSION="26091201"
 RELEASE_TAG="$SHORT_VERSION-$RELEASE_BUILD"
 
 # Locales kept in the bundle (nautilus ships ~120; trim to a reasonable set).
