@@ -28,10 +28,16 @@ the following gates pass with the exact signed and notarized release payload:
    verification,” a build-only check, or a direct-helper-only test must never
    be reported as end-to-end updater validation.
 
-Any failure blocks the release. Do not bypass, weaken, or relabel these gates.
-If an older public updater cannot install the candidate, document the manual
-bootstrap requirement prominently and do not claim that automatic updating
-works from that version.
+Any failure in the candidate blocks the release. Do not bypass, weaken, or
+relabel these gates. The sole exception is a bootstrap release needed because
+the already-published helper itself is proven unable to install any successor;
+new payload code cannot repair code that exits before replacement. Before such
+a bootstrap release, reproduce and record the old helper failure, pass a manual
+replacement test using the final notarized DMG, pass every candidate-side gate,
+state prominently that affected versions require one manual replacement, and
+obtain the user's explicit authorization to publish despite the broken
+old-version automatic path. Never claim that automatic updating works from an
+affected version.
 
 Every release must update the root README, `docs/STATUS.md`, and its release
 notes in the same clean tagged commit state as the code. Public releases must
