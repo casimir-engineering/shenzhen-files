@@ -55,12 +55,19 @@ release tag:
 3. Regenerate changed assets, run the relevant tests and packaging checks, then
    commit the code, generated artifacts, and documentation together. Require a
    clean worktree before tagging.
-4. Point the release tag at that exact commit and push the branch and tag
+4. For every updater-affecting change, pass the mandatory updater gates in the
+   root `AGENTS.md` using the exact signed and notarized candidate. In
+   particular, the previous public app must update to the candidate and the
+   candidate helper must update a disposable installed copy. The helper must be
+   spawned through production's Foundation `NSTask` path and observed writing
+   its readiness marker; invoking `--post-update` directly does not satisfy
+   this gate. Record the commands and results in the release notes.
+5. Point the release tag at that exact commit and push the branch and tag
    together.
-5. Sign, notarize, staple, and Gatekeeper-test the DMG before publishing it.
+6. Sign, notarize, staple, and Gatekeeper-test the DMG before publishing it.
    Publish a normal release, not a draft or prerelease, with the notarized
    `ShenzhenFiles-mac-arm64.dmg` asset.
-6. Verify GitHub's asset SHA-256 matches the local DMG and that
+7. Verify GitHub's asset SHA-256 matches the local DMG and that
    `/releases/latest/download/ShenzhenFiles-mac-arm64.dmg` redirects to the new
    tag.
 
