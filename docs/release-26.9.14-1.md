@@ -29,7 +29,8 @@ fixed helper shipped here.
 
 ## Release validation record
 
-The exact signed and notarized `26.9.14-1` payload passed before publication:
+The exact signed and notarized amended `26.9.14-1` payload passed before the
+amendment was declared complete:
 
 1. `ninja -C build` completed successfully, and
    `patches/macos-port-full.patch` applied cleanly to a fresh upstream archive;
@@ -37,25 +38,32 @@ The exact signed and notarized `26.9.14-1` payload passed before publication:
 2. `package/test-updater-helper-e2e.sh "dist/Shenzhen Files.app"` passed on
    the Developer ID signed candidate: `READY_MARKER=observed`, `HELPER_EXIT=0`,
    `EXACT_RELAUNCH=observed`, tag `26.9.14-1`, and build `26091401`.
-3. Apple notarization submission `6828fd8f-e496-4b4e-94a6-237c4c3c821f`
+3. Apple notarization submission `51f1fc79-c55d-428c-9511-f3bb44bb1c16`
    was accepted. Stapling and validation passed, the quarantined app copied
    from the DMG was accepted as Notarized Developer ID, the same production-path
    updater test passed on that copy, and the eight-second launch smoke test
    stayed alive without a new crash report.
-4. A manual bootstrap fixture replaced a copied installed `26.8.27-2` app with
-   the app from the final DMG. The result passed Developer ID/Gatekeeper checks
-   and reported tag `26.9.14-1`, build `26091401`; its executable and icon hashes
-   matched the mounted DMG payload.
-5. The same Foundation-path test rejected the real installed `26.8.27-2`
+4. An installed Developer ID signed `26.8.27-2` fixture downloaded the exact
+   notarized candidate from GitHub HTTPS, verified the advertised digest and
+   notarization, mounted and extracted the DMG, moved it to persistent staging,
+   observed helper readiness, exited, completed the move-aside swap, relaunched
+   from `/Applications`, wrote `update_ok=26.9.14-1`, and removed both `.old`
+   and staging. The resulting executable and icon hashes matched the DMG.
+5. After replacing the public asset, that installed old-to-new test passed a
+   second time through the actual GitHub `releases/latest` API and production
+   `ShenzhenFiles-mac-arm64.dmg` URL. It finished at tag `26.9.14-1`, build
+   `26091401`, with the exact candidate hashes and no old bundle or staging
+   directory left behind.
+6. The same Foundation-path test rejected the real installed `26.8.27-2`
    helper before readiness and logged `helper detach failed: Operation not
    permitted`, proving the regression test catches the published defect.
-6. The mounted final DMG contains a two-representation background TIFF: 600×400
+7. The mounted final DMG contains a two-representation background TIFF: 600×400
    at 72 dpi and 1200×800 at 144 dpi; Finder's `.DS_Store` selects that TIFF.
 
 Final artifact identities:
 
-- DMG SHA-256: `f6df67fa06d9afab0533acb3db46b2b1717d463a2a1576a87f2523a9d309674b`
-- `Contents/MacOS/nautilus` SHA-256: `1096f1da3440357757be76956186b7b84d0bba8039a78bcaca02dbf640610b27`
+- DMG SHA-256: `3fcd47f11498fa38ef77f52102bc8462a8b0c2189086bc567066b5acfe98d29a`
+- `Contents/MacOS/nautilus` SHA-256: `2ef5b1d8c568b6c387198ba97146850868fc85a909e4eeb7b2227b39a7556659`
 - `Contents/Resources/AppIcon.icns` SHA-256: `6197e99853013428c68195815f5939b22d11bec5e9496e5de86c963cea801739`
 
 **Full Changelog:** https://github.com/casimir-engineering/shenzhen-files/compare/26.9.12-1...26.9.14-1

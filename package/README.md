@@ -73,6 +73,12 @@ release tag:
 7. Verify GitHub's asset SHA-256 matches the local DMG and that
    `/releases/latest/download/ShenzhenFiles-mac-arm64.dmg` redirects to the new
    tag.
+8. For updater changes, complete the two network gates in `AGENTS.md`: run the
+   installed old-to-new flow with the exact notarized candidate through a
+   disposable GitHub HTTPS feed before replacing the production asset, then
+   repeat through the actual `releases/latest` API and production asset after
+   upload. Verify the relaunched tag/build, executable and icon hashes,
+   `update_ok`, and removal of `.old` and staging; delete the disposable assets.
 
 `sign-and-notarize.sh` enforces the clean-worktree rule, checks that the root
 README's advertised release matches the bundle tag, runs a signed-candidate

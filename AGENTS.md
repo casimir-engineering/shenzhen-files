@@ -29,6 +29,13 @@ the following gates pass with the exact signed and notarized release payload:
 5. Record the exact commands and results in the release notes. “Static
    verification,” a build-only check, or a direct-helper-only test must never
    be reported as end-to-end updater validation.
+6. Validate network delivery twice for updater changes: before replacing the
+   production asset, exercise the full installed path with the exact notarized
+   candidate served by GitHub HTTPS from a disposable validation feed; after
+   replacing the asset, repeat from an older installed build through the actual
+   `releases/latest` API and production asset URL. Remove every disposable
+   validation asset afterward. A production-path failure requires immediate
+   rollback of the public asset and blocks completion of the release.
 
 Any failure in the candidate blocks the release. Do not bypass, weaken, or
 relabel these gates. The sole exception is a bootstrap release needed because
