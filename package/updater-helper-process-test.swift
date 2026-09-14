@@ -96,4 +96,3 @@ while !relaunched.isTerminated && Date() < terminationDeadline {
 if !relaunched.isTerminated {
     relaunched.forceTerminate()
 }
-
