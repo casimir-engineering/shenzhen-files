@@ -46,6 +46,20 @@ mkdir -p "$target_parent" "$stage_parent" "$test_root/home"
 ditto "$candidate_app" "$target_app"
 ditto "$candidate_app" "$staged_app"
 
+# A same-version swap cannot expose stale metadata caches at the final path.
+# Give the disposable source a deliberately older identity while retaining the
+# candidate's updater executable, then ad-hoc sign that local-only fixture.
+source_tag="0.0.0-0"
+source_build="1"
+/usr/libexec/PlistBuddy \
+  -c 'Set :CFBundleShortVersionString 0.0.0' \
+  -c "Set :CFBundleVersion $source_build" \
+  -c "Set :SZFReleaseTag $source_tag" \
+  "$target_app/Contents/Info.plist"
+codesign --force --sign - "$target_app" >/dev/null
+codesign --verify --deep --strict "$target_app"
+[[ "$source_tag" != "$tag" ]] || fail "updater test requires different source and destination tags"
+
 expected_executable_sha="$(shasum -a 256 "$staged_app/$helper_rel" | awk '{print $1}')"
 expected_icon_sha="$(shasum -a 256 "$staged_app/$icon_rel" | awk '{print $1}')"
 
@@ -75,5 +89,5 @@ actual_icon_sha="$(shasum -a 256 "$target_app/$icon_rel" | awk '{print $1}')"
 [[ "$actual_icon_sha" == "$expected_icon_sha" ]] \
   || fail "final icon does not match the staged payload"
 
-printf 'PASS: Foundation helper readiness, atomic swap, exact-path relaunch, tag %s, build %s, executable hash, and icon hash.\n' \
-  "$tag" "$build"
+printf 'PASS: Foundation helper readiness, atomic swap, exact-path relaunch, %s → %s, build %s, executable hash, and icon hash.\n' \
+  "$source_tag" "$tag" "$build"

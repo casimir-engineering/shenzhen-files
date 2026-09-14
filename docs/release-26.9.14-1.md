@@ -3,9 +3,14 @@
 - Fixes “The update installer exited before it was ready.” The helper now
   handles Foundation's production process-group launch semantics without
   weakening failures from any other `setsid()` condition.
+- The amended asset also fixes final verification after a real version change.
+  Update identity is read directly from the `Info.plist` currently on disk,
+  avoiding `NSBundle`'s stale path cache after the atomic rename.
 - Adds a mandatory signed-candidate updater test that exercises the actual
   Foundation `Process`/`NSTask` path, readiness handshake, move-aside swap,
   exact-path relaunch, release identity, executable, and application icon.
+- The disposable source is stamped with a deliberately older tag and build;
+  same-version swaps are rejected as invalid updater coverage.
 - Runs that test both before notarization and against the quarantined app copied
   from the final notarized DMG.
 - Makes full updater validation and README/status/release-note updates explicit

@@ -11140,10 +11140,10 @@ index 0000000..b2479cb
 +}
 diff --git a/src/nautilus-macos-updater.m b/src/nautilus-macos-updater.m
 new file mode 100644
-index 0000000..a758804
+index 0000000..10f368a
 --- /dev/null
 +++ b/src/nautilus-macos-updater.m
-@@ -0,0 +1,2512 @@
+@@ -0,0 +1,2541 @@
 +/*
 + * nautilus-macos-updater.m: GitHub-release self-updater (Shenzhen Files).
 + *
@@ -11515,11 +11515,34 @@ index 0000000..a758804
 + * the tag/version cross-check that catches a swapped payload. */
 +static NSString *szf_bundle_version (NSString *appPath);
 +
++/* NSBundle caches bundle objects by path. That is unsafe across the atomic
++ * update rename: after <target>.app is moved aside and the staged app takes
++ * its place, bundleWithPath:<target> can still expose the old app's Info.plist.
++ * Always parse the bytes currently present at the path for update identity
++ * decisions. */
++static NSDictionary *
++szf_bundle_info_dictionary_on_disk (NSString *appPath)
++{
++    NSString *infoPath = [appPath stringByAppendingPathComponent:@"Contents/Info.plist"];
++    NSData *data = [NSData dataWithContentsOfFile:infoPath
++                                         options:NSDataReadingMappedIfSafe
++                                           error:nil];
++    if (!data)
++    {
++        return nil;
++    }
++    id info = [NSPropertyListSerialization propertyListWithData:data
++                                                        options:NSPropertyListImmutable
++                                                         format:NULL
++                                                          error:nil];
++    return [info isKindOfClass:NSDictionary.class] ? info : nil;
++}
++
 +static BOOL
 +szf_verify_extracted_app (NSString *appPath, NSString *tag, NSError **error)
 +{
-+    NSBundle *bundle = [NSBundle bundleWithPath:appPath];
-+    NSString *bundleID = bundle.bundleIdentifier;
++    NSDictionary *info = szf_bundle_info_dictionary_on_disk (appPath);
++    NSString *bundleID = info[@"CFBundleIdentifier"];
 +    if (![bundleID isEqualToString:kSZFAppBundleID])
 +    {
 +        if (error)
@@ -11543,7 +11566,7 @@ index 0000000..a758804
 +static NSString *
 +szf_bundle_version (NSString *appPath)
 +{
-+    NSDictionary *info = [NSBundle bundleWithPath:appPath].infoDictionary;
++    NSDictionary *info = szf_bundle_info_dictionary_on_disk (appPath);
 +    NSString *releaseTag = info[@"SZFReleaseTag"];
 +    if ([releaseTag isKindOfClass:NSString.class] && releaseTag.length &&
 +        szf_version_components (releaseTag))
@@ -11970,11 +11993,17 @@ index 0000000..a758804
 +        /* TRUST BOUNDARY (final): re-verify the code now sitting at the
 +         * final path before it is registered and launched, then strip
 +         * quarantine so Gatekeeper does not translocate the relaunch. */
-+        if (!szf_verify_signed_bundle ([NSURL fileURLWithPath:targetBundlePath],
-+                                       /*isApp=*/YES, NULL) ||
-+            !szf_verify_extracted_app (targetBundlePath, pendingTag, NULL))
++        NSError *finalVerifyError = nil;
++        BOOL finalSignatureValid =
++            szf_verify_signed_bundle ([NSURL fileURLWithPath:targetBundlePath],
++                                      /*isApp=*/YES, &finalVerifyError);
++        BOOL finalIdentityValid =
++            finalSignatureValid &&
++            szf_verify_extracted_app (targetBundlePath, pendingTag, &finalVerifyError);
++        if (!finalSignatureValid || !finalIdentityValid)
 +        {
-+            NSLog (@"Shenzhen Files updater: final bundle verification failed");
++            NSLog (@"Shenzhen Files updater: final bundle verification failed: %@",
++                   finalVerifyError);
 +            NSError *removeError = nil;
 +            BOOL removedFailedUpdate = [fm removeItemAtPath:targetBundlePath
 +                                                      error:&removeError];
