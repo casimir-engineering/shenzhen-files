@@ -268,7 +268,7 @@ gh release upload "$TAG" "$DMG" --clobber -R "$REPO"
 
 log "Re-checking the GitHub API digest against the local DMG…"
 local_sha="$(shasum -a 256 "$DMG" | awk '{print $1}')"
-for attempt in 1 2 3 4 5; do
+for _attempt in 1 2 3 4 5; do
   api_sha="$(curl -s "https://api.github.com/repos/$REPO/releases/latest" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((a.get('digest') or '' for a in d['assets'] if a['name']=='$ASSET'), ''))" \
     | sed 's/^sha256://')"
