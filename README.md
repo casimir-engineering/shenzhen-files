@@ -30,6 +30,7 @@
 - **Native-sized macOS icon** — the blue folder and legible 深圳 mark use the LaunchServices-rendered enclosure and optical safe area, matching neighboring Dock icons without a nested tile or oversized raw canvas.
 - **Auto-update** — a silent daily check against GitHub releases plus a "Check for Updates…" menu item; updates download into persistent secure staging, verify offline (Developer ID + notarization, pinned Team ID and bundle id), atomically swap the bundle, refresh the app icon, and relaunch the exact new build in place.
 - **Production-path updater testing** — release packaging now exercises the signed helper through Foundation's real process-launch path before notarization and repeats the complete helper swap using the app extracted from the notarized DMG.
+- **Retina installer artwork** — the DMG background carries native 1x and 2x representations, keeping its logo, wordmark, instructions, and arrow sharp on Retina displays.
 
 ## Install
 
