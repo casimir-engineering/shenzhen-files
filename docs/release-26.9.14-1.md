@@ -10,6 +10,9 @@
   from the final notarized DMG.
 - Makes full updater validation and README/status/release-note updates explicit
   repository release gates.
+- Repackages the DMG background as a native multi-representation TIFF with
+  exact 600×400 1x and 1200×800 2x artwork, so Finder uses a sharp Retina image
+  instead of scaling the low-resolution representation.
 
 ## One-time bootstrap note
 

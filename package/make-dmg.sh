@@ -3,9 +3,10 @@
 # make-dmg.sh — build the styled Shenzhen Files installer DMG (PLAN.md §4.5).
 #
 # Pipeline: staging dir (Nautilus.app + /Applications symlink + hidden
-# .background/) → hdiutil UDRW image → mount → Finder view options via
-# osascript (icon size 128, background picture, icon positions 150/450) →
-# detach → hdiutil convert to compressed UDZO.
+# .background/) → combine 1x/2x art into a Retina-aware multi-representation
+# TIFF → hdiutil UDRW image → mount → Finder view options via osascript (icon
+# size 128, background picture, icon positions 150/450) → detach → hdiutil
+# convert to compressed UDZO.
 #
 # Usage:
 #   ./make-dmg.sh [--check] [path/to/app] [out.dmg]
@@ -36,7 +37,7 @@ out_dmg="${2:-$repo_root/dist/ShenzhenFiles-mac-$(uname -m).dmg}"
 
 # --- validation (both modes) -------------------------------------------------
 fail=0
-for tool in hdiutil osascript sips; do
+for tool in hdiutil osascript sips tiffutil; do
   if command -v "$tool" >/dev/null 2>&1; then
     [[ $check_only -eq 1 ]] && echo "ok: $tool ($(command -v "$tool"))"
   else
@@ -53,6 +54,18 @@ for asset in "$bg_png" "$bg_png_2x"; do
     fail=1
   fi
 done
+if [[ -f "$bg_png" && -f "$bg_png_2x" ]]; then
+  background_1x_size="$(sips -g pixelWidth -g pixelHeight "$bg_png" 2>/dev/null |
+                        awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w "x" h}')"
+  background_2x_size="$(sips -g pixelWidth -g pixelHeight "$bg_png_2x" 2>/dev/null |
+                        awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w "x" h}')"
+  if [[ "$background_1x_size" != "600x400" || "$background_2x_size" != "1200x800" ]]; then
+    echo "error: DMG backgrounds must be 600x400 (1x) and 1200x800 (2x); got $background_1x_size and $background_2x_size" >&2
+    fail=1
+  elif [[ $check_only -eq 1 ]]; then
+    echo "ok: DMG backgrounds are exact 1x/2x dimensions"
+  fi
+fi
 
 if [[ $check_only -eq 1 ]]; then
   if [[ -d "$app_path" ]]; then
@@ -88,7 +101,14 @@ trap cleanup EXIT
 cp -R "$app_path" "$staging/$app_name"
 ln -s /Applications "$staging/Applications"
 mkdir "$staging/.background"
-cp "$bg_png" "$bg_png_2x" "$staging/.background/"
+tiffutil -cathidpicheck "$bg_png" "$bg_png_2x" \
+  -out "$staging/.background/dmg-background.tiff" >/dev/null
+tiff_rep_count="$(tiffutil -info "$staging/.background/dmg-background.tiff" |
+                   grep -c '^Directory at ')"
+[[ "$tiff_rep_count" == "2" ]] || {
+  echo "error: Retina DMG background does not contain both 1x and 2x representations" >&2
+  exit 1
+}
 
 # --- read-write image, Finder layout ----------------------------------------
 # Size the image with headroom for the Finder metadata (.DS_Store).
@@ -126,7 +146,7 @@ tell application "Finder"
         set viewOptions to the icon view options of container window
         set arrangement of viewOptions to not arranged
         set icon size of viewOptions to 128
-        set background picture of viewOptions to file ".background:dmg-background.png"
+        set background picture of viewOptions to file ".background:dmg-background.tiff"
         set position of item "$app_name" of container window to {150, 200}
         set position of item "Applications" of container window to {450, 200}
         close
