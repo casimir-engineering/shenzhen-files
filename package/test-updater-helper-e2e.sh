@@ -58,6 +58,11 @@ source_build="1"
   "$target_app/Contents/Info.plist"
 codesign --force --sign - "$target_app" >/dev/null
 codesign --verify --deep --strict "$target_app"
+# A browser-quarantined candidate remains quarantined in staged_app so its
+# real downloaded-payload verification is exercised. The synthetic old source
+# was locally modified and ad-hoc re-signed solely for this fixture, so remove
+# quarantine from that source copy before Process launches its helper.
+xattr -dr com.apple.quarantine "$target_app" 2>/dev/null || true
 [[ "$source_tag" != "$tag" ]] || fail "updater test requires different source and destination tags"
 
 expected_executable_sha="$(shasum -a 256 "$staged_app/$helper_rel" | awk '{print $1}')"
