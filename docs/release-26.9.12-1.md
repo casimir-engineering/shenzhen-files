@@ -19,4 +19,14 @@ opened in two windows and four tabs before successful native eject, native icon
 rendering from both paths and `file://` URLs, and frequency ordering with `0600`
 persistence.
 
+## Known updater defect
+
+The installed updater helper in this release can exit before readiness because
+Foundation launches it as a process-group leader and its unconditional
+`setsid()` then fails with `EPERM`. The earlier direct-shell helper validation
+did not exercise that production launch behavior. Users must install the next
+fixed DMG manually once; this release cannot repair its own already-installed
+helper. Production-path helper testing and a real prior-release update are now
+mandatory release gates in `AGENTS.md`.
+
 **Full Changelog:** https://github.com/casimir-engineering/shenzhen-files/compare/26.8.27-2...26.9.12-1

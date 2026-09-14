@@ -11140,10 +11140,10 @@ index 0000000..b2479cb
 +}
 diff --git a/src/nautilus-macos-updater.m b/src/nautilus-macos-updater.m
 new file mode 100644
-index 0000000..5367954
+index 0000000..a758804
 --- /dev/null
 +++ b/src/nautilus-macos-updater.m
-@@ -0,0 +1,2504 @@
+@@ -0,0 +1,2512 @@
 +/*
 + * nautilus-macos-updater.m: GitHub-release self-updater (Shenzhen Files).
 + *
@@ -11821,7 +11821,15 @@ index 0000000..5367954
 +        {
 +            return 1;
 +        }
-+        if (setsid () < 0)  /* detach so we outlive the exiting parent */
++        /* Foundation's NSTask/NSProcess launches its child as a process-group
++         * leader on macOS. In that production launch path setsid() correctly
++         * returns EPERM: a process-group leader cannot start a new session.
++         * The child is already detached from the parent's process group, has
++         * null stdio, and is not tied to a controlling terminal, so it can
++         * safely outlive the GUI parent. Shell-launched diagnostic helpers are
++         * not normally group leaders and still create their own session here. */
++        if (setsid () < 0 &&
++            !(errno == EPERM && getpgrp () == getpid ()))
 +        {
 +            NSLog (@"Shenzhen Files updater: helper detach failed: %s", strerror (errno));
 +            return 1;

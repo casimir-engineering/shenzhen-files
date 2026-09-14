@@ -10,16 +10,19 @@
 #      with the Developer ID identity, hardened runtime + secure timestamp
 #      (bundle-dylibs.sh with MAC_SIGN_IDENTITY; no entitlements — Shenzhen
 #      PDF's Developer ID build ships none either).
-#   3. Build the styled DMG (make-dmg.sh), codesign the DMG.
-#   4. notarytool submit --wait with the stored keychain profile, staple,
+#   3. Exercise the signed candidate's updater helper through Foundation's
+#      production Process/NSTask launch path, including readiness, swap,
+#      exact-path relaunch, version, executable, and icon checks.
+#   4. Build the styled DMG (make-dmg.sh), codesign the DMG.
+#   5. notarytool submit --wait with the stored keychain profile, staple,
 #      stapler validate.
-#   5. Verify: codesign --deep --strict on the app, spctl on the DMG, and a
+#   6. Verify: codesign --deep --strict on the app, spctl on the DMG, and a
 #      Gatekeeper simulation — copy the app out of the mounted DMG, attach a
 #      quarantine xattr, and require `spctl -a` to accept it.
-#   6. gh release upload --clobber, then re-check that the GitHub API's
+#   7. gh release upload --clobber, then re-check that the GitHub API's
 #      sha256 digest matches the local DMG (the self-updater reads it) and
 #      that /releases/latest/download/ resolves.
-#   7. Install the signed app to /Applications (replaces the previous copy).
+#   8. Install the signed app to /Applications (replaces the previous copy).
 #
 # Prereqs (one-time, already true on this machine unless noted):
 #   * Developer ID Application cert in the login keychain.
@@ -139,6 +142,10 @@ MAC_SIGN_IDENTITY="$IDENTITY" ./package/bundle-dylibs.sh
 codesign --verify --deep --strict "$APP"
 log "Deep verification passed."
 
+log "Testing the signed updater helper through Foundation's production launch path…"
+./package/test-updater-helper-e2e.sh "$APP"
+log "Signed candidate updater-helper test passed."
+
 # Read the explicit GitHub/self-update identity. CFBundleVersion is a separate,
 # globally increasing number used by macOS for bundle/cache ordering.
 TAG="$(/usr/libexec/PlistBuddy -c 'Print :SZFReleaseTag' "$APP/Contents/Info.plist")"
@@ -155,7 +162,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. DMG: build, sign
+# 4. DMG: build, sign
 # ---------------------------------------------------------------------------
 log "Building the DMG…"
 ./package/make-dmg.sh "$APP" "$DMG"
@@ -163,7 +170,7 @@ log "Signing the DMG…"
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 
 # ---------------------------------------------------------------------------
-# 4. Notarize + staple (submits to Apple and waits; typically a few minutes)
+# 5. Notarize + staple (submits to Apple and waits; typically a few minutes)
 # ---------------------------------------------------------------------------
 log "Submitting to Apple notary service (waits for the verdict)…"
 xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
@@ -172,7 +179,7 @@ xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 
 # ---------------------------------------------------------------------------
-# 5. Gatekeeper verification, including a quarantined-copy simulation
+# 6. Gatekeeper verification, including a quarantined-copy simulation
 # ---------------------------------------------------------------------------
 log "Verifying the DMG with spctl…"
 spctl -a -t open --context context:primary-signature -vv "$DMG" 2>&1 | grep -q "accepted" \
@@ -202,6 +209,13 @@ echo "$verdict" | grep -q "accepted" \
 echo "$verdict" | grep -q "Notarized Developer ID" \
   || fail "Gatekeeper simulation FAILED: source is not 'Notarized Developer ID'."
 log "Quarantined copy accepted as Notarized Developer ID."
+
+# Repeat the updater gate against the exact app copied from the notarized DMG.
+# The earlier run is a fast pre-notarization failure check; this one proves the
+# payload users actually download and extract.
+log "Testing the updater helper from the notarized DMG payload…"
+./package/test-updater-helper-e2e.sh "$qtest_dir/Shenzhen Files.app"
+log "Notarized-payload updater-helper test passed."
 
 # Launch smoke test: an accepted signature is NOT proof the app RUNS (the
 # hardened runtime can still SIGABRT on a dlopen Library Validation rejection,
@@ -247,7 +261,7 @@ if [[ $PREPARE_ONLY -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Publish: clobber the release asset, re-verify the updater metadata
+# 7. Publish: clobber the release asset, re-verify the updater metadata
 # ---------------------------------------------------------------------------
 log "Uploading the notarized DMG to release $TAG (replaces the old asset)…"
 gh release upload "$TAG" "$DMG" --clobber -R "$REPO"
@@ -271,7 +285,7 @@ curl -sI "https://github.com/$REPO/releases/latest/download/$ASSET" \
 log "Download URL resolves to $TAG."
 
 # ---------------------------------------------------------------------------
-# 7. Install locally (optional)
+# 8. Install locally (optional)
 # ---------------------------------------------------------------------------
 if [[ $SKIP_INSTALL -eq 0 ]]; then
   log "Installing to /Applications…"

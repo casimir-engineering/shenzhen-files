@@ -16,6 +16,8 @@ the following gates pass with the exact signed and notarized release payload:
    exact-path relaunch, version handshake, and old-bundle cleanup.
 2. Exercise the candidate's own updater against a disposable installed copy so
    the helper shipped in this release is proven able to install the next one.
+   Run `package/test-updater-helper-e2e.sh` against the final signed candidate;
+   this automated gate is mandatory, but it does not replace gate 1.
 3. Spawn the helper through the same Foundation `NSTask` path used in
    production and observe its readiness marker. Invoking `--post-update`
    directly from a shell is useful supplemental coverage but does **not** count
