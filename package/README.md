@@ -79,6 +79,11 @@ helper preflight before notarization, and repeats the helper test against the
 quarantined app copied from the notarized DMG before it can publish anything.
 The separate previous-public-release to candidate test remains a manual release
 gate because it exercises the live GitHub download and notarized DMG path.
+If that test is impossible only because the previously published helper exits
+before it can replace itself, follow the narrowly scoped bootstrap exception in
+`AGENTS.md`; it requires an exact old-helper reproduction, a notarized-DMG
+manual replacement test, passing candidate-side gates, prominent disclosure,
+and explicit user authorization before publication.
 
 ## Release signing + notarization (optional, env-gated)
 
