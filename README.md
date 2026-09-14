@@ -5,7 +5,7 @@
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest/download/ShenzhenFiles-mac-arm64.dmg"><img src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" height="46"></a>
 
-<sub>Latest <b>26.9.12-1</b> · Apple Silicon</sub>
+<sub>Latest <b>26.9.14-1</b> · Apple Silicon</sub>
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest">All releases</a> · <a href="https://github.com/casimir-engineering/shenzhen-files">Source</a>
 
@@ -29,6 +29,7 @@
 - **Full Disk Access onboarding** — a one-time walkthrough for the TCC grant that browsing the Trash needs.
 - **Native-sized macOS icon** — the blue folder and legible 深圳 mark use the LaunchServices-rendered enclosure and optical safe area, matching neighboring Dock icons without a nested tile or oversized raw canvas.
 - **Auto-update** — a silent daily check against GitHub releases plus a "Check for Updates…" menu item; updates download into persistent secure staging, verify offline (Developer ID + notarization, pinned Team ID and bundle id), atomically swap the bundle, refresh the app icon, and relaunch the exact new build in place.
+- **Production-path updater testing** — release packaging now exercises the signed helper through Foundation's real process-launch path before notarization and repeats the complete helper swap using the app extracted from the notarized DMG.
 
 ## Install
 
@@ -36,14 +37,13 @@ Download the DMG above and drag **Shenzhen Files** onto **Applications**.
 
 Releases are signed with Developer ID and notarized by Apple, so the app opens normally after download — no Gatekeeper workarounds needed.
 
-> **Known updater issue in every published build through 26.9.12-1:** the
+> **Upgrading from a build through 26.9.12-1:** the
 > already-installed helper can exit before readiness when Foundation launches
 > it as a process-group leader. A direct shell test did not reproduce that
-> production behavior. Automatic update from these builds therefore cannot be
-> relied on; install the next fixed DMG once by replacing the app in
-> Applications. The repository now has a production-path signed-helper test,
-> and both it and a real previous-release-to-candidate update are mandatory
-> release gates.
+> production behavior. Those builds cannot repair their own installed helper;
+> install `26.9.14-1` once by replacing the app in Applications. Automatic
+> updates after that bootstrap use the corrected, production-path-tested
+> helper.
 
 <details>
 <summary>First launch of an old, un-notarized build</summary>
