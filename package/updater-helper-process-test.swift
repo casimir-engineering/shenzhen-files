@@ -17,6 +17,28 @@ let expectedTag = CommandLine.arguments[4]
 let readyPath = CommandLine.arguments[5]
 let logPath = CommandLine.arguments[6]
 let bundleIdentifier = "com.intuition.shenzhenfiles"
+let normalizedTarget = URL(fileURLWithPath: targetApp)
+    .standardizedFileURL.resolvingSymlinksInPath().path
+
+private func exactTargetApplication() -> NSRunningApplication? {
+    NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+        .first { app in
+            guard !app.isTerminated, let bundleURL = app.bundleURL else { return false }
+            return bundleURL.standardizedFileURL.resolvingSymlinksInPath().path == normalizedTarget
+        }
+}
+
+private func terminateExactTargetApplication() {
+    guard let app = exactTargetApplication() else { return }
+    app.terminate()
+    let deadline = Date().addingTimeInterval(5)
+    while !app.isTerminated && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    if !app.isTerminated {
+        app.forceTerminate()
+    }
+}
 
 let alreadyRunning = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
     .filter { !$0.isTerminated }
@@ -58,6 +80,7 @@ while Date() < readyDeadline {
 guard observedReady else {
     task.terminate()
     task.waitUntilExit()
+    terminateExactTargetApplication()
     fail("updater helper exited or timed out before its readiness marker was observed")
 }
 print("READY_MARKER=observed")
@@ -69,30 +92,19 @@ while task.isRunning && Date() < exitDeadline {
 if task.isRunning {
     task.terminate()
     task.waitUntilExit()
+    terminateExactTargetApplication()
     fail("updater helper did not finish within 35 seconds")
 }
-guard task.terminationStatus == 0 else {
+if task.terminationStatus != 0 {
+    terminateExactTargetApplication()
     fail("updater helper exited with status \(task.terminationStatus)")
 }
 print("HELPER_EXIT=0")
 
-let normalizedTarget = URL(fileURLWithPath: targetApp)
-    .standardizedFileURL.resolvingSymlinksInPath().path
-let relaunched = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
-    .first { app in
-        guard !app.isTerminated, let bundleURL = app.bundleURL else { return false }
-        return bundleURL.standardizedFileURL.resolvingSymlinksInPath().path == normalizedTarget
-    }
+let relaunched = exactTargetApplication()
 guard let relaunched else {
     fail("helper exited successfully but the exact updated bundle was not running")
 }
 print("EXACT_RELAUNCH=observed")
 
-relaunched.terminate()
-let terminationDeadline = Date().addingTimeInterval(5)
-while !relaunched.isTerminated && Date() < terminationDeadline {
-    Thread.sleep(forTimeInterval: 0.05)
-}
-if !relaunched.isTerminated {
-    relaunched.forceTerminate()
-}
+terminateExactTargetApplication()

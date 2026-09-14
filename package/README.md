@@ -23,7 +23,7 @@ meson install -C build --no-rebuild   # refresh install/ if the build changed
 | `make-dmg.sh` | Staging dir → Retina-aware multi-representation TIFF background (600×400 at 1x plus 1200×800 at 2x) → UDRW image → Finder layout via osascript (128 px icons, 150/450 slots) → UDZO compression. `--check` verifies the source dimensions and required tools. |
 | `make-icon.sh` | Regenerates `AppIcon.icns` + `dmg-logo.png` from the approved full-bleed `AppIcon-source-v7.png` artwork. Its white-to-icy-blue canvas is intentionally left unmasked so LaunchServices applies the native macOS enclosure and optical sizing; bundled code must not override `NSApplication.applicationIconImage`. |
 | `nautilus-launcher.c` | Source of the exec wrapper; sets `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GDK_PIXBUF_MODULE_FILE`, `GIO_MODULE_DIR`, `FONTCONFIG_FILE` relative to the bundle, then execs `Contents/MacOS/nautilus`. |
-| `test-updater-helper-e2e.sh` | Mandatory signed-candidate updater test. It launches `--post-update` through Foundation `Process`/`NSTask`, observes readiness, performs a disposable move-aside swap, confirms exact-path relaunch, and compares the final tag, build, executable, and icon with the staged payload. |
+| `test-updater-helper-e2e.sh` | Mandatory signed-candidate updater test. It gives the disposable source a deliberately older identity, launches `--post-update` through Foundation `Process`/`NSTask`, observes readiness, performs the move-aside swap, confirms exact-path relaunch, and compares the final tag, build, executable, and icon with the differently-versioned staged payload. Same-version swaps are rejected as invalid coverage. |
 
 ## Standalone vs. Finder integration (installer-facing)
 
@@ -61,9 +61,10 @@ release tag:
    particular, the previous public app must update to the candidate and the
    candidate helper must pass `package/test-updater-helper-e2e.sh` against the
    final signed candidate. That script spawns the helper through production's
-   Foundation `NSTask` path and observes its readiness marker; invoking
-   `--post-update` directly does not satisfy this gate. Record the commands and
-   results in the release notes.
+   Foundation `NSTask` path, observes its readiness marker, and requires a real
+   old-tag to new-tag transition; invoking `--post-update` directly or swapping
+   identical version metadata does not satisfy this gate. Record the commands
+   and results in the release notes.
 5. Point the release tag at that exact commit and push the branch and tag
    together.
 6. Sign, notarize, staple, and Gatekeeper-test the DMG before publishing it.
