@@ -23,6 +23,7 @@ meson install -C build --no-rebuild   # refresh install/ if the build changed
 | `make-dmg.sh` | Staging dir → UDRW image → Finder layout via osascript (background art, 128 px icons, 150/450 slots) → UDZO compression. `--check` for a dry-run. |
 | `make-icon.sh` | Regenerates `AppIcon.icns` + `dmg-logo.png` from the approved full-bleed `AppIcon-source-v7.png` artwork. Its white-to-icy-blue canvas is intentionally left unmasked so LaunchServices applies the native macOS enclosure and optical sizing; bundled code must not override `NSApplication.applicationIconImage`. |
 | `nautilus-launcher.c` | Source of the exec wrapper; sets `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GDK_PIXBUF_MODULE_FILE`, `GIO_MODULE_DIR`, `FONTCONFIG_FILE` relative to the bundle, then execs `Contents/MacOS/nautilus`. |
+| `test-updater-helper-e2e.sh` | Mandatory signed-candidate updater test. It launches `--post-update` through Foundation `Process`/`NSTask`, observes readiness, performs a disposable move-aside swap, confirms exact-path relaunch, and compares the final tag, build, executable, and icon with the staged payload. |
 
 ## Standalone vs. Finder integration (installer-facing)
 
@@ -58,10 +59,11 @@ release tag:
 4. For every updater-affecting change, pass the mandatory updater gates in the
    root `AGENTS.md` using the exact signed and notarized candidate. In
    particular, the previous public app must update to the candidate and the
-   candidate helper must update a disposable installed copy. The helper must be
-   spawned through production's Foundation `NSTask` path and observed writing
-   its readiness marker; invoking `--post-update` directly does not satisfy
-   this gate. Record the commands and results in the release notes.
+   candidate helper must pass `package/test-updater-helper-e2e.sh` against the
+   final signed candidate. That script spawns the helper through production's
+   Foundation `NSTask` path and observes its readiness marker; invoking
+   `--post-update` directly does not satisfy this gate. Record the commands and
+   results in the release notes.
 5. Point the release tag at that exact commit and push the branch and tag
    together.
 6. Sign, notarize, staple, and Gatekeeper-test the DMG before publishing it.
@@ -71,9 +73,12 @@ release tag:
    `/releases/latest/download/ShenzhenFiles-mac-arm64.dmg` redirects to the new
    tag.
 
-`sign-and-notarize.sh` enforces the clean-worktree rule and checks that the root
-README's advertised release matches the bundle tag before it can notarize or
-publish anything.
+`sign-and-notarize.sh` enforces the clean-worktree rule, checks that the root
+README's advertised release matches the bundle tag, runs a signed-candidate
+helper preflight before notarization, and repeats the helper test against the
+quarantined app copied from the notarized DMG before it can publish anything.
+The separate previous-public-release to candidate test remains a manual release
+gate because it exercises the live GitHub download and notarized DMG path.
 
 ## Release signing + notarization (optional, env-gated)
 

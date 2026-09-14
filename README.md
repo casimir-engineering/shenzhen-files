@@ -36,11 +36,14 @@ Download the DMG above and drag **Shenzhen Files** onto **Applications**.
 
 Releases are signed with Developer ID and notarized by Apple, so the app opens normally after download — no Gatekeeper workarounds needed.
 
-> **Upgrading from 26.7.22-1 or 26.8.27-1:** those builds perform the final
-> replacement with their already-installed updater helper, which can abort on
-> a stale macOS process record. If the old version remains after an automatic
-> update, install the current DMG once by replacing the app in Applications.
-> Releases from 26.8.27-2 onward use the repaired updater path.
+> **Known updater issue in every published build through 26.9.12-1:** the
+> already-installed helper can exit before readiness when Foundation launches
+> it as a process-group leader. A direct shell test did not reproduce that
+> production behavior. Automatic update from these builds therefore cannot be
+> relied on; install the next fixed DMG once by replacing the app in
+> Applications. The repository now has a production-path signed-helper test,
+> and both it and a real previous-release-to-candidate update are mandatory
+> release gates.
 
 <details>
 <summary>First launch of an old, un-notarized build</summary>
@@ -75,7 +78,7 @@ See [`package/README.md`](package/README.md) for the packaging details and [`doc
 
 ## Updater trust model
 
-Releases are signed with Developer ID and notarized (the same setup as Shenzhen PDF); the updater verifies each downloaded update offline with Security.framework — full Developer ID requirement with a pinned Team ID, a stapled-notarization check on the DMG, and hardened-runtime + bundle-id pins on the extracted app. The sha256 digest from the GitHub API is checked as a corruption heuristic. The helper acknowledges verified persistent staging before the parent exits; the swap is a move-aside two-rename with checked rollback, and the relaunched app confirms the exact release tag before the previous bundle is discarded. A separate globally increasing `CFBundleVersion` keeps macOS bundle and icon caches ordered correctly. Release signing runs through `package/sign-and-notarize.sh` (sign every Mach-O with hardened runtime → styled DMG → `notarytool` → staple → Gatekeeper-simulate on a quarantined copy → publish).
+Releases are signed with Developer ID and notarized (the same setup as Shenzhen PDF); the updater verifies each downloaded update offline with Security.framework — full Developer ID requirement with a pinned Team ID, a stapled-notarization check on the DMG, and hardened-runtime + bundle-id pins on the extracted app. The sha256 digest from the GitHub API is checked as a corruption heuristic. The helper acknowledges verified persistent staging before the parent exits; the swap is a move-aside two-rename with checked rollback, and the relaunched app confirms the exact release tag before the previous bundle is discarded. A separate globally increasing `CFBundleVersion` keeps macOS bundle and icon caches ordered correctly. Release signing runs through `package/sign-and-notarize.sh` (sign every Mach-O with hardened runtime → exercise the signed updater helper through Foundation's production launch path → styled DMG → `notarytool` → staple → Gatekeeper-simulate on a quarantined copy → publish). Repository rules also require a real update from the previous public release to the candidate before publication.
 
 ## License
 
