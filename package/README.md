@@ -10,6 +10,7 @@ Run from the repo root, in order (re-run all three whenever the binary or the
 install prefix changes — e.g. after other agents rebuild and `meson install`):
 
 ```bash
+./tools/setup-friends.sh              # Shenzhen Friends at the friends.lock pin
 meson install -C build --no-rebuild   # refresh install/ if the build changed
 ./package/make-app.sh                 # assemble "dist/Shenzhen Files.app"
 ./package/bundle-dylibs.sh            # bundle dylib closure + rewrite + sign
@@ -18,8 +19,10 @@ meson install -C build --no-rebuild   # refresh install/ if the build changed
 
 | Script | What it does |
 |---|---|
-| `make-app.sh` | Assembles the bundle: binary + compiled C launcher (`nautilus-launcher.c`), Info.plist (PlistBuddy-stamped), AppIcon, share payload (nautilus data/ontology, compiled gsettings schemas, Adwaita+hicolor icon themes with regenerated caches, shared-mime-info db, gtk-4.0 emoji data, trimmed locales), gdk-pixbuf loaders with a relocatable `loaders.cache`, GIO modules with `giomodule.cache`, minimal fontconfig config. |
-| `bundle-dylibs.sh` | Transitive `otool -L` walker: copies the dylib closure into `Contents/Frameworks`, rewrites ids/references to `@executable_path/../Frameworks/…`, strips absolute rpaths, audits the result, then codesigns every Mach-O and the bundle (ad-hoc by default). |
+| `make-app.sh` | Assembles the bundle: binary + compiled C launcher (`nautilus-launcher.c`), Info.plist (PlistBuddy-stamped), AppIcon, share payload (nautilus data/ontology, compiled gsettings schemas, Adwaita+hicolor icon themes with regenerated caches, shared-mime-info db, gtk-4.0 emoji data, trimmed locales), gdk-pixbuf loaders with a relocatable `loaders.cache`, GIO modules with `giomodule.cache`, minimal fontconfig config. Shenzhen Friends: refuses to start unless `tools/setup-friends.sh --check` passes, then copies the helper into `Contents/Helpers/` with its version keys stamped from `friends.lock`, and the animal set and acknowledgements into `Contents/Resources/Friends/`; ends with `check-friends-bundle.sh`. |
+| `bundle-dylibs.sh` | Transitive `otool -L` walker: copies the dylib closure into `Contents/Frameworks`, rewrites ids/references to `@executable_path/../Frameworks/…`, strips absolute rpaths, audits the result, then codesigns every Mach-O and the bundle (ad-hoc by default). The Friends helper is signed on its own line before the outer bundle, after checking it links system libraries only; ends with `check-friends-bundle.sh --signed`. |
+| `check-friends-bundle.sh` | What the app carries of Shenzhen Friends: the helper's identifier (`com.intuition.shenzhenfriends`, shared with ShenzhenPDF), version keys from `friends.lock`, system-only libraries, minimum macOS; the animal set and acknowledgements against the pinned checkout; the Local Network and Bluetooth strings and the `_szfriends._tcp` Bonjour service in both Info.plists; with `--signed`, the helper's signature and the app's deep strict verification. |
+| `test-friends-bundle.sh` | Packages the app (ad-hoc, never launched), checks the result and `codesign --verify --deep --strict`, then plants one defect per copy to prove each check fires. Needs `install/` and the Friends build. |
 | `make-dmg.sh` | Staging dir → Retina-aware multi-representation TIFF background (600×400 at 1x plus 1200×800 at 2x) → UDRW image → Finder layout via osascript (128 px icons, 150/450 slots) → UDZO compression. `--check` verifies the source dimensions and required tools. |
 | `make-icon.sh` | Regenerates `AppIcon.icns` + `dmg-logo.png` from the approved full-bleed `AppIcon-source-v7.png` artwork. Its white-to-icy-blue canvas is intentionally left unmasked so LaunchServices applies the native macOS enclosure and optical sizing; bundled code must not override `NSApplication.applicationIconImage`. |
 | `nautilus-launcher.c` | Source of the exec wrapper; sets `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR`, `GDK_PIXBUF_MODULE_FILE`, `GIO_MODULE_DIR`, `FONTCONFIG_FILE` relative to the bundle, then execs `Contents/MacOS/nautilus`. |
@@ -48,6 +51,10 @@ release tag:
 1. Update `SHORT_VERSION`, `RELEASE_BUILD`, and `BUNDLE_VERSION` in
    `make-app.sh`. `BUNDLE_VERSION` must remain globally increasing across all
    releases; the GitHub/self-update tag is `SHORT_VERSION-RELEASE_BUILD`.
+   The Shenzhen Friends helper keeps the version of the Shenzhen PDF build in
+   `friends.lock`; move that pin only with its `helper_build_number`. In the
+   Shenzhen repository there is no pin: the helper is built from `apps/pdf`,
+   and `tools/check-friends-number.sh` there must pass first.
 2. Update the root `README.md`: change the `Latest <b>…</b>` marker to the full
    `SHORT_VERSION-RELEASE_BUILD` tag (the value stamped as `SZFReleaseTag`) and
    document every user-visible change.
@@ -66,7 +73,8 @@ release tag:
    identical version metadata does not satisfy this gate. Record the commands
    and results in the release notes.
 5. Point the release tag at that exact commit and push the branch and tag
-   together.
+   together. In the Shenzhen repository the tag is `files/<tag>`; the GitHub
+   release on casimir-engineering/shenzhen-files keeps the plain `<tag>`.
 6. Sign, notarize, staple, and Gatekeeper-test the DMG before publishing it.
    Publish a normal release, not a draft or prerelease, with the notarized
    `ShenzhenFiles-mac-arm64.dmg` asset.

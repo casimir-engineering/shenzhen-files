@@ -24,3 +24,11 @@
 
 # Local agent config
 .cursor/
+
+# Staging dir of tools/setup-nautilus-tree.sh (removed on exit)
+/.nautilus-setup.*/
+
+# shenzhen-pdf at the commit in friends.lock, fetched and built by
+# tools/setup-friends.sh, and that script's staging dir (removed on exit)
+/friends-src/
+/.friends-setup.*/

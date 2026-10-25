@@ -41,8 +41,8 @@ Apple
     Show “sample-audio.kicad_pro” in Finder
     diagram0706.drawio
     Show “diagram0706.drawio” in Finder
-    OV50Q40_COB_DS_1.02.pdf
-    Show “OV50Q40_COB_DS_1.02.pdf” in Finder
+    Sample40_DS_1.02.pdf
+    Show “Sample40_DS_1.02.pdf” in Finder
     screenhunter-76-dec.-15-15.07.jpg
     Show “screenhunter-76-dec.-15-15.07.jpg” in Finder
     w2-test.pdf

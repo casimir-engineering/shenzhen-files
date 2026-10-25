@@ -20,8 +20,13 @@
 #                                      loaders.cache) + GIO modules (giomodule.cache)
 #   Contents/Resources/etc/fonts/      minimal fontconfig config (safety net only;
 #                                      GTK4 on macOS uses CoreText)
+#   Contents/Helpers/Shenzhen Friends.app  the Shenzhen Friends helper, built by
+#                                      tools/setup-friends.sh from the shenzhen-pdf
+#                                      commit in friends.lock
+#   Contents/Resources/Friends/        its animal set and Acknowledgements.txt
 #
-# Run order for a full package:  make-app.sh -> bundle-dylibs.sh -> make-dmg.sh
+# Run order for a full package:
+#   tools/setup-friends.sh -> make-app.sh -> bundle-dylibs.sh -> make-dmg.sh
 #
 # Usage: ./package/make-app.sh [app-path]  (default: <repo>/dist/Shenzhen Files.app)
 set -euo pipefail
@@ -38,9 +43,19 @@ APP="${1:-$repo_root/dist/Shenzhen Files.app}"
 # a globally increasing numeric CFBundleVersion for LaunchServices/App Store
 # cache semantics, and an explicit YY.M.DD-BUILD release tag for GitHub.
 BUNDLE_ID="com.intuition.shenzhenfiles"
-SHORT_VERSION="26.9.14"
+SHORT_VERSION="26.10.25"
 RELEASE_BUILD="1"
-BUNDLE_VERSION="26091401"
+BUNDLE_VERSION="26102501"
+# tools/release.sh builds a candidate of another version (a dry run of a throwaway one) with
+# SZF_RELEASE_VERSION=<YY.M.D>-<N>; publishing refuses a version other than the one written above.
+if [[ -n "${SZF_RELEASE_VERSION:-}" ]]; then
+  [[ "$SZF_RELEASE_VERSION" =~ ^([0-9]{2})\.([1-9][0-9]?)\.([1-9][0-9]?)-([1-9][0-9]?)$ ]] ||
+    { echo "error: SZF_RELEASE_VERSION must read YY.M.D-N, not $SZF_RELEASE_VERSION" >&2; exit 2; }
+  SHORT_VERSION="${SZF_RELEASE_VERSION%-*}"
+  RELEASE_BUILD="${SZF_RELEASE_VERSION##*-}"
+  BUNDLE_VERSION="$(printf '%02d%02d%02d%02d' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+    "${BASH_REMATCH[4]}")"
+fi
 RELEASE_TAG="$SHORT_VERSION-$RELEASE_BUILD"
 
 # Locales kept in the bundle (nautilus ships ~120; trim to a reasonable set).
@@ -57,6 +72,13 @@ for f in "$INSTALL/bin/nautilus" "$INSTALL/lib/libnautilus-extension.4.dylib" \
   [[ -e "$f" ]] || { echo "error: missing input: $f" >&2; exit 1; }
 done
 
+# Shenzhen Friends: the checkout and the helper built from it must be the ones
+# friends.lock pins; --check says what to run when they are not.
+# shellcheck source-path=SCRIPTDIR source=../tools/friends-lock.sh
+. "$repo_root/tools/friends-lock.sh"
+friends_lock_read "$repo_root"
+"$repo_root/tools/setup-friends.sh" --check
+
 echo "==> assembling $APP"
 rm -rf "$APP"
 MACOS="$APP/Contents/MacOS"
@@ -69,6 +91,34 @@ cp "$INSTALL/bin/nautilus" "$MACOS/nautilus"
 cc -O2 -Wall -Wextra -o "$MACOS/nautilus-launcher" "$script_dir/nautilus-launcher.c"
 cp "$INSTALL/lib/libnautilus-extension.4.dylib" "$FRAMEWORKS/"
 chmod -R u+w "$MACOS" "$FRAMEWORKS"
+
+# --- Shenzhen Friends --------------------------------------------------------------
+# The helper goes where the Friends host adapter starts it. The animal set ships
+# once, in Resources/Friends/, where the views look and where the embedded helper
+# looks from Contents/Helpers/ (shenzhen-pdf avatars/SZFriendsAnimalSet.m), so the
+# helper's own copy is dropped. Its version keys come from friends.lock, never from
+# this app's version: ShenzhenPDF embeds the same helper, and the running one hands
+# over to the embedded helper with the higher build number (PROTOCOL.md § Lifecycle),
+# so the number has to say which Friends code it is. They are stamped again here,
+# as ShenzhenPDF does for its copy, so the shipped keys come from the lock itself
+# and not from whichever run built the bundle. Stamping breaks the helper's
+# signature until bundle-dylibs.sh signs it.
+HELPERS="$APP/Contents/Helpers"
+FRIENDS_RES="$RES/Friends"
+FRIENDS_HELPER="$HELPERS/$FRIENDS_HELPER_NAME.app"
+mkdir -p "$HELPERS" "$FRIENDS_RES/animals/svg" "$FRIENDS_RES/animals/pdf"
+cp -R "$FRIENDS_HELPER_BUILT" "$HELPERS/"
+rm -rf "$FRIENDS_HELPER/Contents/Resources/Friends"
+xattr -cr "$FRIENDS_HELPER"
+/usr/libexec/PlistBuddy \
+  -c "Set :CFBundleShortVersionString $FRIENDS_SHORT_VERSION" \
+  -c "Set :CFBundleVersion $FRIENDS_BUILD_NUMBER" \
+  -c "Set :SZFriendsBuildNumber $FRIENDS_BUILD_NUMBER" \
+  "$FRIENDS_HELPER/Contents/Info.plist"
+cp "$FRIENDS_ANIMALS/manifest.json" "$FRIENDS_RES/animals/"
+cp "$FRIENDS_ANIMALS/svg/"*.svg "$FRIENDS_RES/animals/svg/"
+cp "$FRIENDS_ANIMALS/pdf/"*.pdf "$FRIENDS_RES/animals/pdf/"
+cp "$FRIENDS_ACKNOWLEDGEMENTS" "$FRIENDS_RES/Acknowledgements.txt"
 
 # --- Info.plist + icon -----------------------------------------------------------
 cp "$script_dir/Info.plist.template" "$APP/Contents/Info.plist"
@@ -196,6 +246,8 @@ mkdir -p "$GIO_DIR"
 cp -L "$BREW/lib/gio/modules/"*.so "$GIO_DIR/"
 chmod -R u+w "$GIO_DIR"
 "$BREW/bin/gio-querymodules" "$GIO_DIR"
+
+"$script_dir/check-friends-bundle.sh" "$APP"
 
 echo "==> app assembled: $APP"
 echo "    next: ./package/bundle-dylibs.sh \"$APP\""

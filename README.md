@@ -5,7 +5,7 @@
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest/download/ShenzhenFiles-mac-arm64.dmg"><img src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" height="46"></a>
 
-<sub>Latest <b>26.9.14-1</b> · Apple Silicon</sub>
+<sub>Latest <b>26.10.25-1</b> · Apple Silicon</sub>
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest">All releases</a> · <a href="https://github.com/casimir-engineering/shenzhen-files">Source</a>
 
@@ -18,6 +18,8 @@
 ## What the port adds on macOS
 
 - **Native menu bar** — the full GNOME Files menu rendered as a real NSMenu bar (File · Edit · View · Go · Window · Help), with working key equivalents.
+- **Search commands with Cmd-K** — type a few letters to find a command (New Folder, Show Hidden Files, Preferences…, and Friends' own), move with the arrow keys, and press Return to run it. Each command shows its shortcut. Also in Help ▸ Search Commands….
+- **Friends (beta) with Cmd-J** — opens Shenzhen Friends with the cursor in its search field, and closes it again, even from that field. Also in View ▸ Friends (Beta) and in the Friends button's tooltip; does nothing while Friends is off.
 - **Finder-like Dock lifecycle** — closing the last window keeps the app alive; clicking the Dock icon or pressing Cmd-T opens a new window, while Cmd-T adds a tab when a window exists.
 - **Mounted drives in the sidebar** — the startup disk, external disks, disk images, and network volumes appear under mounts with native eject or unmount controls and automatic hot-plug refresh. Ejecting a volume that is open in Shenzhen Files first returns every affected window and tab to Home, releases its directory handles, and then safely ejects it.
 - **QuickLook everywhere** — real macOS thumbnails in the grid, space-bar preview, and LaunchServices file-type icons for anything QuickLook can't draw.
@@ -60,15 +62,18 @@ For Trash browsing, grant Full Disk Access when the app offers the walkthrough (
 The port is maintained as a patch against upstream GNOME Nautilus plus a packaging pipeline:
 
 ```bash
-git clone https://gitlab.gnome.org/GNOME/nautilus.git
-cd nautilus && git apply ../patches/macos-port-full.patch
+# Homebrew deps: gtk4 libadwaita glib meson ninja pkgconf gettext \
+#   gdk-pixbuf librsvg tinysparql gnome-autoar blueprint-compiler icu4c@78 \
+#   libarchive json-glib desktop-file-utils shared-mime-info
 
-# Homebrew deps: gtk4 libadwaita glib meson ninja pkg-config gettext \
-#   gdk-pixbuf librsvg tinysparql json-glib libportal desktop-file-utils \
-#   shared-mime-info
-meson setup build -Dbuildtype=debugoptimized -Dmacos_port=true
-ninja -C build
-meson install -C build --no-rebuild
+# Fetch upstream at the pinned commit, apply patches/, verify, configure,
+# build and install into ./install (safe to re-run)
+./tools/setup-nautilus-tree.sh
+
+# Fetch Shenzhen PDF at the commit in friends.lock into ./friends-src and
+# build the Shenzhen Friends helper the app embeds (safe to re-run). In the
+# Shenzhen repository it builds Friends from ../pdf instead, nothing fetched.
+./tools/setup-friends.sh
 
 ./package/make-app.sh          # assemble dist/Shenzhen Files.app
 ./package/bundle-dylibs.sh     # bundle dylib closure + rewrite + sign
@@ -83,4 +88,6 @@ Releases are signed with Developer ID and notarized (the same setup as Shenzhen 
 
 ## License
 
-GPL-2.0-or-later, same as upstream Nautilus. The port patch and packaging scripts are under the same license.
+GPL-3.0-or-later, same as upstream Nautilus. The port patch and packaging scripts are under the same license.
+
+The app also contains Shenzhen Friends, built from [Shenzhen PDF](https://github.com/casimir-engineering/shenzhen-pdf) (GPL-3.0) at the commit in [`friends.lock`](friends.lock), so Shenzhen Files.app as a whole is distributed under the terms of GPL-3.0 ([`LICENSE`](LICENSE), [`NOTICE`](NOTICE)). Shenzhen Friends includes libsodium (ISC), cJSON (MIT) and a selection from the EFF Large Wordlist for Passphrases (CC BY 4.0); their notices ship in the app as `Contents/Resources/Friends/Acknowledgements.txt`.

@@ -31,6 +31,39 @@
     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
+    <!-- Shenzhen Friends finds people nearby over the local network and Bluetooth
+         from its helper (Contents/Helpers/Shenzhen Friends.app). macOS holds this
+         app responsible for the helper it starts, so its permission prompts name
+         Shenzhen Files and show these strings: without them a prompt explains
+         nothing, browsing _szfriends._tcp can be refused, and asking for Bluetooth
+         ends the helper. The helper's own Info.plist carries them too. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Friends uses your local network to find people near you and to send them messages and files directly.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Friends uses Bluetooth to find people near you, and to reach them when Wi-Fi can't.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_szfriends._tcp</string>
+    </array>
+    <!-- Shenzhen Friends links: a friend link's or download link's web page
+         opens shenzhenfiles://friends/link#<payload> (shenzhen-pdf
+         portable/friends/PROTOCOL.md § Links). GTK hands the URL to the
+         application's open handler, which passes it to Friends
+         (src/nautilus-friends-links.c); nothing happens until the person
+         presses the card Friends then shows. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.intuition.shenzhenfiles.friends-link</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>shenzhenfiles</string>
+            </array>
+        </dict>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>
