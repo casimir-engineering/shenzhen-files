@@ -981,10 +981,10 @@ index bae3122..28b7217 100644
      {
 diff --git a/src/nautilus-friends-host.c b/src/nautilus-friends-host.c
 new file mode 100644
-index 0000000..7f4d5c6
+index 0000000..e9ff99f
 --- /dev/null
 +++ b/src/nautilus-friends-host.c
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,274 @@
 +/*
 + * nautilus-friends-host.c: what Shenzhen Files tells the Friends views (gtk/szfriends_gtk_host.h).
 + *
@@ -1186,6 +1186,39 @@ index 0000000..7f4d5c6
 +    }
 +}
 +
++/* host->attachable_items_at_once: the same rows, on the frame `#` is typed, while the tab has listed its folder
++ * already; NULL otherwise (the folder is never read here). */
++static GPtrArray *
++attachable_items_at_once (gpointer    host_data,
++                          GtkWindow  *window,
++                          const char *query)
++{
++    g_autoptr (NautilusWindowSlot) slot = NULL;
++    g_autoptr (NautilusDirectory) directory = NULL;
++    GFile *location;
++    GList *files;
++    GPtrArray *items;
++
++    if (NAUTILUS_IS_WINDOW (window))
++    {
++        g_object_get (window, "active-slot", &slot, NULL);
++    }
++    location = slot != NULL ? nautilus_window_slot_get_location (slot) : NULL;
++    if (location == NULL)
++    {
++        return NULL;
++    }
++    directory = nautilus_directory_get (location);
++    if (!nautilus_directory_are_all_files_seen (directory))
++    {
++        return NULL;
++    }
++    files = nautilus_directory_get_file_list (directory);
++    items = nautilus_friends_items_collect (nautilus_window_slot_get_selection (slot), files, query != NULL ? query : "");
++    nautilus_file_list_free (files);
++    return items;
++}
++
 +/* ---- The host ------------------------------------------------------------------------------------------------ */
 +
 +static const char *const no_formats[] = { NULL };
@@ -1210,11 +1243,12 @@ index 0000000..7f4d5c6
 +    /* NULL: the views claim what this host implements (attach.items, drop.files), and later what they draw. */
 +    host->capabilities = NULL;
 +    host->open_formats = no_formats;
-+    host->attach_placeholder = _("Search selected files and this folder");
++    host->attach_empty = _("No matching files");
 +
 +    host->install_button = install_button;
 +    host->remove_button = remove_button;
 +    host->attachable_items = nautilus_friends_attachable_items;
++    host->attachable_items_at_once = attachable_items_at_once;
 +    host->open_received_file = show_received_file;
 +    host->reveal_file = show_received_file;
 +    /* Files only: no extra drop types, no veto, the views' own look and metrics, no Markdown, `/` or export. */
@@ -1227,10 +1261,10 @@ index 0000000..7f4d5c6
 +}
 diff --git a/src/nautilus-friends-items.c b/src/nautilus-friends-items.c
 new file mode 100644
-index 0000000..b7fa38e
+index 0000000..a0edea7
 --- /dev/null
 +++ b/src/nautilus-friends-items.c
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,224 @@
 +/*
 + * nautilus-friends-items.c: the files `#` offers in Shenzhen Files.
 + *
@@ -1381,6 +1415,7 @@ index 0000000..b7fa38e
 +    g_autofree char *folder = NULL;
 +    g_autofree char *detail = NULL;
 +    g_autofree char *kind = NULL;
++    SZFriendsGtkHostItem *item;
 +    const char *title;
 +
 +    if (nautilus_file_is_directory (file) || (path = sendable_path (file)) == NULL)
@@ -1392,7 +1427,13 @@ index 0000000..b7fa38e
 +    /* Says why each file is offered: the person picked it, or it sits in the folder they are looking at. */
 +    detail = selected ? g_strdup_printf (_("Selected in %s"), folder) : g_strdup_printf (_("In %s"), folder);
 +    kind = nautilus_friends_kind_label (title);
-+    g_ptr_array_add (items, szfriends_gtk_host_item_new (title, detail, kind, path, NULL));
++    item = szfriends_gtk_host_item_new (title, detail, kind, path, NULL);
++    /* What the person has selected in front of them comes first, with the pill ShenzhenPDF gives its open tab. */
++    if (selected)
++    {
++        item->badge = g_strdup (_("Current"));
++    }
++    g_ptr_array_add (items, item);
 +}
 +
 +static gint
@@ -8067,7 +8108,7 @@ index 0000000..ef96729
 +}
 diff --git a/test/friends/test-nautilus-friends.c b/test/friends/test-nautilus-friends.c
 new file mode 100644
-index 0000000..5398bad
+index 0000000..20c183a
 --- /dev/null
 +++ b/test/friends/test-nautilus-friends.c
 @@ -0,0 +1,461 @@
@@ -8130,7 +8171,7 @@ index 0000000..5398bad
 +#endif
 +    g_assert_nonnull (host.open_formats);
 +    g_assert_null (host.open_formats[0]);
-+    g_assert_cmpstr (host.attach_placeholder, ==, "Search selected files and this folder");
++    g_assert_cmpstr (host.attach_empty, ==, "No matching files");
 +
 +    g_assert_nonnull (host.install_button);
 +    g_assert_nonnull (host.remove_button);
