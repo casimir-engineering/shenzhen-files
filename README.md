@@ -5,7 +5,7 @@
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest/download/ShenzhenFiles-mac-arm64.dmg"><img src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" height="46"></a>
 
-<sub>Latest <b>26.9.14-1</b> · Apple Silicon</sub>
+<sub>Latest <b>26.10.29-1</b> · Apple Silicon</sub>
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest">All releases</a> · <a href="https://github.com/casimir-engineering/shenzhen-files">Source</a>
 
@@ -15,22 +15,25 @@
 
 ---
 
-## What the port adds on macOS
+## What it does on a Mac
 
-- **Native menu bar** — the full GNOME Files menu rendered as a real NSMenu bar (File · Edit · View · Go · Window · Help), with working key equivalents.
-- **Finder-like Dock lifecycle** — closing the last window keeps the app alive; clicking the Dock icon or pressing Cmd-T opens a new window, while Cmd-T adds a tab when a window exists.
-- **Mounted drives in the sidebar** — the startup disk, external disks, disk images, and network volumes appear under mounts with native eject or unmount controls and automatic hot-plug refresh. Ejecting a volume that is open in Shenzhen Files first returns every affected window and tab to Home, releases its directory handles, and then safely ejects it.
-- **QuickLook everywhere** — real macOS thumbnails in the grid, space-bar preview, and LaunchServices file-type icons for anything QuickLook can't draw.
-- **Finder-compatible clipboard** — copying in Finder and pasting in Shenzhen Files transfers the original files, including from read-only locations, instead of mistaking Finder's preview image for the file.
-- **Spotlight-backed search** — the search field streams results from Spotlight, scoped to the folder you're in; plain text entered in the location field searches there, while paths and addresses still navigate.
-- **System integration, strictly opt-in** — open folders by default, sync Finder's sidebar favorites, hide the Finder desktop. Everything is off by default, revertible, and records the prior system state before changing anything.
-- **Native Trash and permanent delete** — regular deletion moves items to the system Trash; Shift+Delete asks for confirmation before permanently deleting them. Show in Finder, Open in Terminal, and "Open With" are also bridged to native macOS services.
-- **Useful Open With chooser** — installed apps show their real macOS icons, and apps explicitly chosen for a file type are promoted into a private, bounded Frequently Used section.
-- **Full Disk Access onboarding** — a one-time walkthrough for the TCC grant that browsing the Trash needs.
-- **Native-sized macOS icon** — the blue folder and legible 深圳 mark use the LaunchServices-rendered enclosure and optical safe area, matching neighboring Dock icons without a nested tile or oversized raw canvas.
-- **Auto-update** — a silent daily check against GitHub releases plus a "Check for Updates…" menu item; updates download into persistent secure staging, verify offline (Developer ID + notarization, pinned Team ID and bundle id), atomically swap the bundle, refresh the app icon, and relaunch the exact new build in place.
-- **Production-path updater testing** — release packaging exercises the signed helper through Foundation's real process-launch path, forces a genuinely different old-to-new version swap, and repeats the complete installed update through GitHub HTTPS with the notarized DMG. Final identity reads the `Info.plist` bytes on disk instead of a path-cached bundle object.
-- **Retina installer artwork** — the DMG background carries native 1x and 2x representations, keeping its logo, wordmark, instructions, and arrow sharp on Retina displays.
+- **Feels at home on the Mac.** A real menu bar with the usual shortcuts, Quick Look thumbnails and the space bar preview, real app icons in Open With, the system Trash, and Show in Finder or Open in Terminal.
+- **Tabs, grid and list views, stars and batch rename,** as in GNOME Files.
+- **Drives in the sidebar.** The startup disk, external disks, disk images and network volumes appear as you plug them in, with an eject button. Ejecting a drive that is open first takes its windows back to Home.
+- **Search as you type.** The search field finds files with Spotlight in the folder you are in. Plain words typed in the location field search too; paths and addresses still go there.
+- **Copy and paste with Finder.** Files copied in Finder paste as the files themselves, even from read-only places.
+- **⌘K finds any command** and shows its shortcut, such as New Folder or Show Hidden Files.
+- **Stays open like Finder.** Closing the last window keeps the app running; click the Dock icon or press ⌘T for a new window.
+- **Only changes your Mac when you ask.** Opening folders with Shenzhen Files by default, syncing Finder's sidebar favourites and hiding the Finder desktop are all off until you turn them on, and can be turned off again.
+- **Updates itself.** It checks once a day, or when you choose **Check for Updates…**, and installs an update only once it has checked its signature and Apple's notarization.
+
+## Friends (Beta)
+
+Message people nearby or by their Friends ID, and send them files. **⌘J** opens and closes Friends. It is the same Friends as in ShenzhenPDF and Shenzhen 3D.
+
+- Type **#** in a message to attach a file: the files selected in the front window come first, marked **Current**, then the folder's other files.
+- Paste (⌘V) to attach files copied in Finder, or a screenshot.
+- When new messages arrive while you read older ones, **New message ↓** takes you to them.
 
 ## Install
 
@@ -60,15 +63,18 @@ For Trash browsing, grant Full Disk Access when the app offers the walkthrough (
 The port is maintained as a patch against upstream GNOME Nautilus plus a packaging pipeline:
 
 ```bash
-git clone https://gitlab.gnome.org/GNOME/nautilus.git
-cd nautilus && git apply ../patches/macos-port-full.patch
+# Homebrew deps: gtk4 libadwaita glib meson ninja pkgconf gettext \
+#   gdk-pixbuf librsvg tinysparql gnome-autoar blueprint-compiler icu4c@78 \
+#   libarchive json-glib desktop-file-utils shared-mime-info
 
-# Homebrew deps: gtk4 libadwaita glib meson ninja pkg-config gettext \
-#   gdk-pixbuf librsvg tinysparql json-glib libportal desktop-file-utils \
-#   shared-mime-info
-meson setup build -Dbuildtype=debugoptimized -Dmacos_port=true
-ninja -C build
-meson install -C build --no-rebuild
+# Fetch upstream at the pinned commit, apply patches/, verify, configure,
+# build and install into ./install (safe to re-run)
+./tools/setup-nautilus-tree.sh
+
+# Fetch Shenzhen PDF at the commit in friends.lock into ./friends-src and
+# build the Shenzhen Friends helper the app embeds (safe to re-run). In the
+# Shenzhen repository it builds Friends from ../pdf instead, nothing fetched.
+./tools/setup-friends.sh
 
 ./package/make-app.sh          # assemble dist/Shenzhen Files.app
 ./package/bundle-dylibs.sh     # bundle dylib closure + rewrite + sign
@@ -83,4 +89,6 @@ Releases are signed with Developer ID and notarized (the same setup as Shenzhen 
 
 ## License
 
-GPL-2.0-or-later, same as upstream Nautilus. The port patch and packaging scripts are under the same license.
+GPL-3.0-or-later, same as upstream Nautilus. The port patch and packaging scripts are under the same license.
+
+The app also contains Shenzhen Friends, built from [Shenzhen PDF](https://github.com/casimir-engineering/shenzhen-pdf) (GPL-3.0) at the commit in [`friends.lock`](https://github.com/casimir-engineering/shenzhen-files/blob/26.10.29-1/friends.lock), so Shenzhen Files.app as a whole is distributed under the terms of GPL-3.0 ([`LICENSE`](LICENSE), [`NOTICE`](https://github.com/casimir-engineering/shenzhen-files/blob/26.10.29-1/NOTICE)). Shenzhen Friends includes libsodium (ISC), cJSON (MIT) and a selection from the EFF Large Wordlist for Passphrases (CC BY 4.0); their notices ship in the app as `Contents/Resources/Friends/Acknowledgements.txt`.
