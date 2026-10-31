@@ -5,7 +5,7 @@
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest/download/ShenzhenFiles-mac-arm64.dmg"><img src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" height="46"></a>
 
-<sub>Latest <b>26.10.29-1</b> · Apple Silicon</sub>
+<sub>Latest <b>26.10.31-1</b> · Apple Silicon</sub>
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest">All releases</a> · <a href="https://github.com/casimir-engineering/shenzhen-files">Source</a>
 
@@ -34,6 +34,8 @@ Message people nearby or by their Friends ID, and send them files. **⌘J** open
 - Type **#** in a message to attach a file: the files selected in the front window come first, marked **Current**, then the folder's other files.
 - Paste (⌘V) to attach files copied in Finder, or a screenshot.
 - When new messages arrive while you read older ones, **New message ↓** takes you to them.
+- Each friend's row shows the latest message in your conversation.
+- Files go over every connection you share at once, such as your network and Bluetooth, and pick up where they stopped.
 
 ## Install
 
@@ -91,4 +93,4 @@ Releases are signed with Developer ID and notarized (the same setup as Shenzhen 
 
 GPL-3.0-or-later, same as upstream Nautilus. The port patch and packaging scripts are under the same license.
 
-The app also contains Shenzhen Friends, built from [Shenzhen PDF](https://github.com/casimir-engineering/shenzhen-pdf) (GPL-3.0) at the commit in [`friends.lock`](https://github.com/casimir-engineering/shenzhen-files/blob/26.10.29-1/friends.lock), so Shenzhen Files.app as a whole is distributed under the terms of GPL-3.0 ([`LICENSE`](LICENSE), [`NOTICE`](https://github.com/casimir-engineering/shenzhen-files/blob/26.10.29-1/NOTICE)). Shenzhen Friends includes libsodium (ISC), cJSON (MIT) and a selection from the EFF Large Wordlist for Passphrases (CC BY 4.0); their notices ship in the app as `Contents/Resources/Friends/Acknowledgements.txt`.
+The app also contains Shenzhen Friends, built from [Shenzhen PDF](https://github.com/casimir-engineering/shenzhen-pdf) (GPL-3.0) at the commit in [`friends.lock`](https://github.com/casimir-engineering/shenzhen-files/blob/26.10.31-1/friends.lock), so Shenzhen Files.app as a whole is distributed under the terms of GPL-3.0 ([`LICENSE`](LICENSE), [`NOTICE`](https://github.com/casimir-engineering/shenzhen-files/blob/26.10.31-1/NOTICE)). Shenzhen Friends includes libsodium (ISC), cJSON (MIT) and a selection from the EFF Large Wordlist for Passphrases (CC BY 4.0); their notices ship in the app as `Contents/Resources/Friends/Acknowledgements.txt`.
