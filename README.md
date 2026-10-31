@@ -5,7 +5,7 @@
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest/download/ShenzhenFiles-mac-arm64.dmg"><img src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon-2ea44f?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" height="46"></a>
 
-<sub>Latest <b>26.10.31-1</b> · Apple Silicon</sub>
+<sub>Latest <b>26.11.1-1</b> · Apple Silicon</sub>
 
 <a href="https://github.com/casimir-engineering/shenzhen-files/releases/latest">All releases</a> · <a href="https://github.com/casimir-engineering/shenzhen-files">Source</a>
 
@@ -34,6 +34,15 @@ Message people nearby or by their Friends ID, and send them files. **⌘J** open
 - Type **#** in a message to attach a file: the files selected in the front window come first, marked **Current**, then the folder's other files.
 - Paste (⌘V) to attach files copied in Finder, or a screenshot.
 - When new messages arrive while you read older ones, **New message ↓** takes you to them.
+- Each friend's row shows the latest message in your conversation.
+- Files go over every connection you share at once, such as your network and Bluetooth, and pick up where they stopped.
+- See how each file travels: an icon for each way it's using, and a bar showing how much each one carried, with the size, percentage, speed and time left.
+- Friends always tries a direct connection first, and stops using the relay as soon as one works.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-friends-transfer-dark.png">
+  <img src="docs/images/readme-friends-transfer-light.png" alt="A file arriving over the same Wi-Fi after it started through the relay: the Wi-Fi icon in use, the relay's cloud as an outline, and the bar in two colours for what each carried, with the size, percentage, speed and time left" width="400">
+</picture>
 
 ## Install
 
